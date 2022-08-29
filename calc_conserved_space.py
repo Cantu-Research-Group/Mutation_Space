@@ -9,6 +9,7 @@ from collections import defaultdict
 parser = argparse.ArgumentParser(description='Computes spatially correlated residues based. Spatial alignment of the proteins is done based upon positioning of most conserved distant residues reported in sequence-aligned file, though this can be disabled to use user-aligned structures.')
 parser.add_argument('listfile', type=str, help='Name of a file containing the list of PDB (path/)files to be processed, with (path/)names on newlines')
 parser.add_argument('msa', type=str, help='Name of the Multiple Sequence Alignment file in ClustalW format')
+parser.add_argument('ref', type=str, help='Name of the PDB file to serve as a reference for the vector analysis')
 parser.add_argument('-noalign', action='store_true', help='If flag is given, the program will not align the vectors according to most distant conserved residue positioning')
 parser.add_argument('-store', type=str, default='processed_pdbs', help='Name of the directory to generate to store the processed PDBs (default: processed_pdbs)')
 args = parser.parse_args()
@@ -72,13 +73,13 @@ def extract_and_save_CAs(file_name, save_dir):
                     avg_y += float(alt_atom[38:46])*float(alt_atom[54:60]) 
                     avg_z += float(alt_atom[46:54])*float(alt_atom[54:60])
                 savepdb.write(header+"{:>8}".format(round(avg_x,3))+"{:>8}".format(round(avg_y,3))+"{:>8}".format(round(avg_z,3))+footer)
-                xyz_coords.append([resnum, avg_x, avg_y, avg_z])
+                xyz_coords.append([resnum, avg_x, avg_y, avg_z, header, footer])
 
             else:
                 savepdb.write(coords_lines[resnum][0])
-                xyz_coords.append([resnum, float(coords_lines[resnum][0][30:38]), float(coords_lines[resnum][0][38:46]), float(coords_lines[resnum][0][46:54])])
+                xyz_coords.append([resnum, float(coords_lines[resnum][0][30:38]), float(coords_lines[resnum][0][38:46]), float(coords_lines[resnum][0][46:54]), coords_lines[resnum][0][:30], coords_lines[resnum][0][54:]])
 
-    xyz_coords = pd.DataFrame(xyz_coords, columns=['ResNum','X','Y','Z'])
+    xyz_coords = pd.DataFrame(xyz_coords, columns=['ResNum','X','Y','Z','header','footer'])
     return xyz_coords
 
 def calculate_distant_residues(df):
@@ -92,33 +93,63 @@ def calculate_distant_residues(df):
             x1 = df.iloc[i]['X']
             test_dist = ( (df.iloc[i]['X']-df.iloc[j]['X'])**2 + (df.iloc[i]['Y']-df.iloc[j]['Y'])**2 + (df.iloc[i]['Z']-df.iloc[j]['Z'])**2 )**0.5
             if test_dist > dist:
-                dist, res1, res2 = test_dist, i, j
+                dist, res1, res2 = test_dist, indices[i], indices[j]
     return res1, res2
 
-def rotate_coords(axis, df, dist_res_1, dist_res_2):
+def calc_rotation_matrix(axis, df, dist_res_1, dist_res_2):
+    def matrix_rot(ax, t):
+        if ax == 'X-axis':
+            return np.matrix([[1,0,0], [0,np.cos(t),-np.sin(t)], [0,np.sin(t),np.cos(t)]])
+        elif ax == 'Y-axis':
+            return np.matrix([[np.cos(t),0,np.sin(t)], [0,1,0], [-np.sin(t),0,np.cos(t)]])
+        elif ax == 'Z-axis':
+            return np.matrix([[np.cos(t),-np.sin(t),0], [np.sin(t),np.cos(t),0], [0,0,1]])
+
     if axis == 'X-axis':
-        p1 = df.iloc[dist_res_1]['Y']
-        p2 = df.iloc[dist_res_1]['Z']
+        p1 = df.iloc[dist_res_1]['Y_align']
+        p2 = df.iloc[dist_res_1]['Z_align']
     elif axis == 'Y-axis':
-        p1 = df.iloc[dist_res_1]['X']
-        p2 = df.iloc[dist_res_1]['Z']
-    else:
-        p1 = df.iloc[dist_res_2]['Y']  
-        p2 = df.iloc[dist_res_2]['X']
+        p1 = df.iloc[dist_res_1]['X_align']
+        p2 = df.iloc[dist_res_1]['Z_align']
+    elif axis == 'Z-axis':
+        p1 = df.iloc[dist_res_2]['Y_align']  
+        p2 = df.iloc[dist_res_2]['X_align']
     mag_p = (p1**2 + p2**2)**0.5
     theta = np.arccos(p2 / mag_p)
-
+    
     if axis == 'X-axis':
-        rot_mat = np.matrix([1,0,0], [0,np.cos(theta),-np.sin(theta)], [0,np.sin(theta),np.cos(theta)])
+        rot_mat = matrix_rot('X-axis',theta)
+        test_mat = np.matrix([[df.iloc[dist_res_1]['X_align']],[df.iloc[dist_res_1]['Y_align']],[df.iloc[dist_res_1]['Z_align']]])
+        test_rot = np.dot(rot_mat, test_mat)
+        if -0.01 <= test_rot[1] <= 0.01:
+            return rot_mat
+        else:
+            rot_mat = matrix_rot('X-axis',-theta)
+            return rot_mat
     elif axis == 'Y-axis':
-        rot_mat = np.matrix([np.cos(theta),0,np.sin(theta)], [0,1,0], [-np.sin(theta),0,np.cos(theta)])
-    else:
-        rot_mat = np.matrix([np.cos(theta),-npt.sin(theta),0], [np.sin(theta),np.cos(theta),0], [0,0,1])
+        rot_mat = matrix_rot('Y-axis',theta)
+        test_mat = np.matrix([[df.iloc[dist_res_1]['X_align']],[df.iloc[dist_res_1]['Y_align']],[df.iloc[dist_res_1]['Z_align']]])
+        test_rot = np.dot(rot_mat, test_mat)
+        if -0.01 <= test_rot[0] <= 0.01:
+            return rot_mat
+        else:
+            rot_mat = matrix_rot('Y-axis',-theta)
+            return rot_mat
+    elif axis == 'Z-axis':
+        rot_mat = matrix_rot('Z-axis',theta)
+        test_mat = np.matrix([[df.iloc[dist_res_2]['X_align']],[df.iloc[dist_res_2]['Y_align']],[df.iloc[dist_res_2]['Z_align']]])
+        test_rot = np.dot(rot_mat, test_mat)
+        if -0.01 <= test_rot[1] <= 0.01:
+            return rot_mat
+        else:
+            rot_mat = matrix_rot('Z-axis',-theta)
+            return rot_mat
 
-
-        
-
-    return pd.Series([1,2,3])
+def rotate_coords(x, y, z, mat):
+    start_mat = np.matrix([[x],[y],[z]])
+    rotated_mat = np.dot(mat, start_mat).tolist()
+    rotated_mat = [item for sublist in rotated_mat for item in sublist]
+    return pd.Series(rotated_mat)
 
 if __name__ == '__main__':
     
@@ -132,6 +163,10 @@ if __name__ == '__main__':
     #Generate the PDB storage directory if it is not present:
     if Path(args.store).is_dir() == False:
         os.mkdir(args.store)
+
+    #Initialize vector and conserved info storage 
+    CA_conserved = defaultdict(list)
+    CA_vectors = defaultdict(list)
 
     #For each structure
     for pdb_file in pdb_files:
@@ -158,14 +193,55 @@ if __name__ == '__main__':
             CA_data['Z_align'] = CA_data['Z']-COM_z
 
             #Rotate to align vectors in planes
-            CA_data[['X_align2','Y_align2','Z_align2']] = CA_data.apply(lambda x: rotate_coords('X-axis', CA_data, distant_res_i, distant_res_j), axis=1)
-
+            rotation_matrix_X = calc_rotation_matrix('X-axis', CA_data, distant_res_i, distant_res_j)
+            CA_data[['X_align','Y_align','Z_align']] = CA_data.apply(lambda x: rotate_coords(x.X_align, x.Y_align, x.Z_align, rotation_matrix_X), axis=1)
+            rotation_matrix_Y = calc_rotation_matrix('Y-axis', CA_data, distant_res_i, distant_res_j)
+            CA_data[['X_align','Y_align','Z_align']] = CA_data.apply(lambda x: rotate_coords(x.X_align, x.Y_align, x.Z_align, rotation_matrix_Y), axis=1)
+            rotation_matrix_Z = calc_rotation_matrix('Z-axis', CA_data, distant_res_i, distant_res_j)
+            CA_data[['X_align','Y_align','Z_align']] = CA_data.apply(lambda x: rotate_coords(x.X_align, x.Y_align, x.Z_align, rotation_matrix_Z), axis=1)
+            
             #Save the altered coordinates
+            with open(args.store+"/aligned-"+pdb_file.rsplit("/",1)[1], 'w') as savefile:
+                for index, row in CA_data.iterrows():
+                    savefile.write(row['header']+"{:>8}".format(round(row['X_align'],3))+"{:>8}".format(round(row['Y_align'],3))+"{:>8}".format(round(row['Z_align'],3))+row['footer'])
 
-        #Calculate the vectors for each residue relative to Dist_r1, Dist_r2, and COM_conserved_res
-            #Store vector results
+        else:
+            CA_data['X_align'] = CA_data['X']
+            CA_data['Y_align'] = CA_data['Y']
+            CA_data['Z_align'] = CA_data['Z']
 
+        #Calculate the vectors for each residue relative to distant_res_i, distant_res_j, and COM
+        CA_data['v1_x'] = CA_data['X_align']-CA_data.iloc[distant_res_i]['X_align']
+        CA_data['v1_y'] = CA_data['Y_align']-CA_data.iloc[distant_res_i]['Y_align']
+        CA_data['v1_z'] = CA_data['Z_align']-CA_data.iloc[distant_res_i]['Z_align']
+        CA_data['v2_x'] = CA_data['X_align']-CA_data.iloc[distant_res_j]['X_align']
+        CA_data['v2_y'] = CA_data['Y_align']-CA_data.iloc[distant_res_j]['Y_align']
+        CA_data['v2_z'] = CA_data['Z_align']-CA_data.iloc[distant_res_j]['Z_align']
+        CA_data['com_x'] = CA_data['X_align']-COM_x
+        CA_data['com_y'] = CA_data['Y_align']-COM_y
+        CA_data['com_z'] = CA_data['Z_align']-COM_z
 
+        #Store vector results and conserved info
+        CA_conserved[pdb_file.rsplit("/",1)[-1]] = [distant_res_i, distant_res_j, COM_x, COM_y, COM_z]
+        CA_data['Structure'] = pdb_file.rsplit("/",1)[-1]
+        CA_data['Indices'] = CA_data.index
+        CA_vectors['v1_x'].extend(CA_data['v1_x'].values.tolist())
+        CA_vectors['v1_y'].extend(CA_data['v1_y'].values.tolist())
+        CA_vectors['v1_z'].extend(CA_data['v1_z'].values.tolist())
+        CA_vectors['v2_x'].extend(CA_data['v2_x'].values.tolist())
+        CA_vectors['v2_y'].extend(CA_data['v2_y'].values.tolist())
+        CA_vectors['v2_z'].extend(CA_data['v2_z'].values.tolist())
+        CA_vectors['com_x'].extend(CA_data['com_x'].values.tolist())
+        CA_vectors['com_y'].extend(CA_data['com_y'].values.tolist())
+        CA_vectors['com_z'].extend(CA_data['com_z'].values.tolist())
+        CA_vectors['Structure'].extend(CA_data['Structure'].values.tolist())
+        CA_vectors['Indices'].extend(CA_data['Indices'].values.tolist())
+
+CA_vectors = pd.DataFrame(CA_vectors)
+
+#Calculate vector comparisons among structures
+for structure in CA_conserved.keys():
+    if structure == args.ref: continue
 
 
 
