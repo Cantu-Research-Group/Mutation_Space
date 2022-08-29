@@ -93,7 +93,32 @@ def calculate_distant_residues(df):
             test_dist = ( (df.iloc[i]['X']-df.iloc[j]['X'])**2 + (df.iloc[i]['Y']-df.iloc[j]['Y'])**2 + (df.iloc[i]['Z']-df.iloc[j]['Z'])**2 )**0.5
             if test_dist > dist:
                 dist, res1, res2 = test_dist, i, j
-    return df.iloc[res1]['ResNum'], df.iloc[res2]['ResNum']
+    return res1, res2
+
+def rotate_coords(axis, df, dist_res_1, dist_res_2):
+    if axis == 'X-axis':
+        p1 = df.iloc[dist_res_1]['Y']
+        p2 = df.iloc[dist_res_1]['Z']
+    elif axis == 'Y-axis':
+        p1 = df.iloc[dist_res_1]['X']
+        p2 = df.iloc[dist_res_1]['Z']
+    else:
+        p1 = df.iloc[dist_res_2]['Y']  
+        p2 = df.iloc[dist_res_2]['X']
+    mag_p = (p1**2 + p2**2)**0.5
+    theta = np.arccos(p2 / mag_p)
+
+    if axis == 'X-axis':
+        rot_mat = np.matrix([1,0,0], [0,np.cos(theta),-np.sin(theta)], [0,np.sin(theta),np.cos(theta)])
+    elif axis == 'Y-axis':
+        rot_mat = np.matrix([np.cos(theta),0,np.sin(theta)], [0,1,0], [-np.sin(theta),0,np.cos(theta)])
+    else:
+        rot_mat = np.matrix([np.cos(theta),-npt.sin(theta),0], [np.sin(theta),np.cos(theta),0], [0,0,1])
+
+
+        
+
+    return pd.Series([1,2,3])
 
 if __name__ == '__main__':
     
@@ -132,7 +157,8 @@ if __name__ == '__main__':
             CA_data['Y_align'] = CA_data['Y']-COM_y
             CA_data['Z_align'] = CA_data['Z']-COM_z
 
-            #Rotate to align vectors in planes so that r1 = <0, 0, d_r1_cr_com>
+            #Rotate to align vectors in planes
+            CA_data[['X_align2','Y_align2','Z_align2']] = CA_data.apply(lambda x: rotate_coords('X-axis', CA_data, distant_res_i, distant_res_j), axis=1)
 
             #Save the altered coordinates
 
