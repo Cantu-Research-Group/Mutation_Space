@@ -41,7 +41,7 @@ if __name__ == '__main__':
     #Extract chain and FASTA info for each PDB
     fastas = {}
     for name in fnames:
-        savefile = open(args.p+"/CA_"+name.split("/")[-1], 'w')
+        savefile = open(args.p+"/"+name.split("/")[-1].split(".pdb")[0]+"_A.pdb", 'w')
         fasta = str()
         with open(name, 'r') as readpdb:
             for line in readpdb:
