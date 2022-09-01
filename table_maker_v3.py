@@ -178,7 +178,8 @@ for piv_res_num, matches in table.items():
 		matches.append(['score', score, ''])
 
 with open(args.o, 'w') as savefile:
-	for i in table['file']:
+	savefile.write("files,")
+	for i in table['files']:
 		savefile.write(str(i)+",")
 	savefile.write("\n")
 	for k, v in table.items():
