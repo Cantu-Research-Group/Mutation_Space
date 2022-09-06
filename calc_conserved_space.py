@@ -175,8 +175,8 @@ if __name__ == '__main__':
         CA_data = extract_and_save_CAs(pdb_file, args.store)
 
         #Identify conserved residues
-        CA_data_conserved = CA_data[np.isin(CA_data['ResNum'],conserved_res_indices[pdb_file]) == True]
-
+        CA_data_conserved = CA_data.iloc[conserved_res_indices[pdb_file]]
+        
         #Calculate the averaged XYZ center of mass/geometry of all conserved residues
         COM_x = CA_data_conserved["X"].mean()
         COM_y = CA_data_conserved["Y"].mean()
@@ -191,6 +191,9 @@ if __name__ == '__main__':
             CA_data['X_align'] = CA_data['X']-COM_x
             CA_data['Y_align'] = CA_data['Y']-COM_y
             CA_data['Z_align'] = CA_data['Z']-COM_z
+            COM_x = COM_x - COM_x #Reassign COM to (0,0,0)
+            COM_y = COM_y - COM_y
+            COM_z = COM_z - COM_z
 
             #Rotate to align vectors in planes
             rotation_matrix_X = calc_rotation_matrix('X-axis', CA_data, distant_res_i, distant_res_j)
@@ -201,7 +204,7 @@ if __name__ == '__main__':
             CA_data[['X_align','Y_align','Z_align']] = CA_data.apply(lambda x: rotate_coords(x.X_align, x.Y_align, x.Z_align, rotation_matrix_Z), axis=1)
             
             #Save the altered coordinates
-            with open(args.store+"/aligned-"+pdb_file.rsplit("/",1)[1], 'w') as savefile:
+            with open(args.store+"/aligned-"+pdb_file.rsplit("/",1)[-1], 'w') as savefile:
                 for index, row in CA_data.iterrows():
                     savefile.write(row['header']+"{:>8}".format(round(row['X_align'],3))+"{:>8}".format(round(row['Y_align'],3))+"{:>8}".format(round(row['Z_align'],3))+row['footer'])
 
@@ -220,7 +223,7 @@ if __name__ == '__main__':
         CA_data['com_x'] = CA_data['X_align']-COM_x
         CA_data['com_y'] = CA_data['Y_align']-COM_y
         CA_data['com_z'] = CA_data['Z_align']-COM_z
-
+        
         #Store vector results and conserved info
         CA_conserved[pdb_file.rsplit("/",1)[-1]] = [distant_res_i, distant_res_j, COM_x, COM_y, COM_z]
         CA_data['Structure'] = pdb_file.rsplit("/",1)[-1]
@@ -243,5 +246,5 @@ CA_vectors = pd.DataFrame(CA_vectors)
 for structure in CA_conserved.keys():
     if structure == args.ref: continue
 
-
+print(pdb_files)
 
