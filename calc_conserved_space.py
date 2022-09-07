@@ -223,11 +223,19 @@ if __name__ == '__main__':
         CA_data['com_x'] = CA_data['X_align']-COM_x
         CA_data['com_y'] = CA_data['Y_align']-COM_y
         CA_data['com_z'] = CA_data['Z_align']-COM_z
-        
+
+        def vector_magnitude(x, y, z):
+            return ((x**2)+(y**2)+(z**2))**0.5
+
+        CA_data['v1_mag'] = CA_data.apply(lambda x: vector_magnitude(x.v1_x, x.v1_y, x.v1_z), axis=1)
+        CA_data['v2_mag'] = CA_data.apply(lambda x: vector_magnitude(x.v2_x, x.v2_y, x.v2_z), axis=1)
+        CA_data['com_mag'] = CA_data.apply(lambda x: vector_magnitude(x.com_x, x.com_y, x.com_z), axis=1)
+
         #Store vector results and conserved info
         CA_conserved[pdb_file.rsplit("/",1)[-1]] = [distant_res_i, distant_res_j, COM_x, COM_y, COM_z]
         CA_data['Structure'] = pdb_file.rsplit("/",1)[-1]
         CA_data['Indices'] = CA_data.index
+
         CA_vectors['v1_x'].extend(CA_data['v1_x'].values.tolist())
         CA_vectors['v1_y'].extend(CA_data['v1_y'].values.tolist())
         CA_vectors['v1_z'].extend(CA_data['v1_z'].values.tolist())
@@ -237,14 +245,49 @@ if __name__ == '__main__':
         CA_vectors['com_x'].extend(CA_data['com_x'].values.tolist())
         CA_vectors['com_y'].extend(CA_data['com_y'].values.tolist())
         CA_vectors['com_z'].extend(CA_data['com_z'].values.tolist())
+        CA_vectors['v1_mag'].extend(CA_data['v1_mag'].values.tolist())
+        CA_vectors['v2_mag'].extend(CA_data['v2_mag'].values.tolist())
+        CA_vectors['com_mag'].extend(CA_data['com_mag'].values.tolist())
         CA_vectors['Structure'].extend(CA_data['Structure'].values.tolist())
+        CA_vectors['ResNum'].extend(CA_data['ResNum'].values.tolist())
         CA_vectors['Indices'].extend(CA_data['Indices'].values.tolist())
 
 CA_vectors = pd.DataFrame(CA_vectors)
 
-#Calculate vector comparisons among structures
+#Calculate vector comparisons between reference and each structure
+df_ref = CA_vectors[CA_vectors['Structure']==args.ref].copy()
+
+def cos_similarity(v1x, v1y, v1z, v2x, v2y, v2z, v1mag, v2mag):
+    value = np.dot([v1x, v1y, v1z], [v2x, v2y, v2z])/(v1mag*v2mag)
+    if np.isnan(value.item()):
+        return 1
+    else:
+        return value
+
 for structure in CA_conserved.keys():
     if structure == args.ref: continue
 
-print(pdb_files)
+    res_in_threshold = {}
+
+    df_sub = CA_vectors[CA_vectors['Structure']==structure]
+    
+    for sub_i in df_sub['Indices'].tolist():
+        sub_i_dat = df_sub.loc[df_sub['Indices']==sub_i]
+
+        #Measure vector magnitude differences
+        df_ref['mag_diff_v1'] = abs(df_ref['v1_mag'] - sub_i_dat['v1_mag'].item())
+        df_ref['mag_diff_v2'] = abs(df_ref['v2_mag'] - sub_i_dat['v2_mag'].item())
+        df_ref['mag_diff_com'] = abs(df_ref['com_mag'] - sub_i_dat['com_mag'].item())
+        df_ref['mag_diff_factor'] = ( ((df_ref['mag_diff_v1']**2) + (df_ref['mag_diff_v2']**2) + (df_ref['mag_diff_com']**2)) / 3)**0.5
+        
+        #Measure vector cosine similarity
+        df_ref['cos_sim_v1'] = df_ref.apply(lambda x: cos_similarity(x.v1_x, x.v1_y, x.v1_z, \
+                sub_i_dat['v1_x'], sub_i_dat['v1_y'], sub_i_dat['v1_z'], x.v1_mag, sub_i_dat['v1_mag']), axis=1)
+        df_ref['cos_sim_v2'] = df_ref.apply(lambda x: cos_similarity(x.v2_x, x.v2_y, x.v2_z, \
+                sub_i_dat['v2_x'], sub_i_dat['v2_y'], sub_i_dat['v2_z'], x.v2_mag, sub_i_dat['v2_mag']), axis=1)
+        df_ref['cos_sim_com'] = df_ref.apply(lambda x: cos_similarity(x.com_x, x.com_y, x.com_z, \
+                sub_i_dat['com_x'], sub_i_dat['com_y'], sub_i_dat['com_z'], x.com_mag, sub_i_dat['com_mag']), axis=1)
+        df_ref['avg_cos_average'] = (df_ref['cos_sim_v1']+df_ref['cos_sim_v2']+df_ref['cos_sim_com'])/3
+
+print(CA_conserved)
 
