@@ -278,16 +278,98 @@ def remove_double_pairs(fin, init):
 
 def remove_sequential_pairs(fin, init):
     aligned_res = list(fin.keys())
-    print(fin)
     ref_res = next(iter(init)) 
     i = 1
+    a_bool, b_bool = False, False
+    a, b = ref_res, ref_res
     while i <= 15: #Find nearest aligned res within up to 15 positions of ref index
-        a,b = ref_res-i, ref_res+i
-        
-        if a in aligned_res or b in aligned_res:
+        if a_bool == False:
+            a = ref_res-i
+        if b_bool == False:
+            b = ref_res+i
+        if a in aligned_res:
+            a_bool = True
+        if b in aligned_res:
+            b_bool = True
+
+        if a_bool == True and b_bool == True:
             break
         else:
             i+=1
+
+    print(a, b, a_bool, b_bool)
+    chosen_sub_res = None
+    shortest_dist = None
+    if a_bool == False and b_bool == True: #Case where only upper bound ref_res was found for comparison
+        for sub_res in init[ref_res]: #Identify subject residue (smaller than ref_res subject) and (with shortest sequential dist to ref_res subject)
+            if sub_res[0] < fin[b]:
+                dist = fin[b]-sub_res[0]
+                if chosen_sub_res == None:
+                    shortest_dist = dist
+                    chosen_sub_res = sub_res[0]
+                elif dist < shortest_dist:
+                    shortest_dist = dist
+                    chosen_sub_res = sub_res[0]
+        if chosen_sub_res == None: #If all options are only larger than ref_res subject, identify subject residue with shortest reverse sequential distance to ref_res subject
+            for sub_res in init[ref_res]:
+                dist = sub_res[0]-fin[b]
+                if shortest_dist == None:
+                    shortest_dist = dist
+                    chosen_sub_res = sub_res[0]
+                elif dist < shortest_dist:
+                    shortest_dist = dist
+                    chosen_sub_res = sub_res[0]
+        fin[ref_res] = chosen_sub_res
+        del init[ref_res]
+        print(fin)
+        return fin, init
+
+    elif a_bool == True and b_bool == False: #Case where only the lower bound ref_res was found for comparison
+        for sub_res in init[ref_res]: #Identify subject residue (larger than ref_res subject) and (with shortest sequential dist to ref_res subject)
+            if sub_res[0] > fin[a]:
+                dist = sub_res[0]-fin[a]
+                if chosen_sub_res == None:
+                    shortest_dist = dist
+                    chosen_sub_res = sub_res[0]
+                elif dist < shortest_dist:
+                    shortest_dist = dist
+                    chosen_sub_res = sub_res[0]
+        if chosen_sub_res == None: #If all options are only smaller than ref_res subject, identify subject residue with shortest reverse sequential distance to ref_res subject
+            for sub_res in init[ref_res]:
+                dist = fin[a]-sub_res[0]
+                if shortest_dist == None:
+                    shortest_dist = dist
+                    chosen_sub_res = sub_res[0]
+                elif dist < shortest_dist:
+                    shortest_dist = dist
+                    chosen_sub_res = sub_res[0]
+        fin[ref_res] = chosen_sub_res
+        del init[ref_res]
+        print(fin)
+        return fin, init
+
+    elif a_bool == True and b_bool == True:
+        for sub_res in init[ref_res]: #Identify subject residue between both ref_res a and ref_res b subjects
+            if fin[a] < sub_res[0] < fin[b] or fin[b] < sub_res[0] < fin[a]:
+                dist = min([abs(sub_res[0]-fin[a]), abs(sub_res[0]-fin[b])])
+                if chosen_sub_res == None:
+                    shortest_dist = dist
+                    chosen_sub_res = sub_res[0]
+                elif dist < shortest_dist:
+                    shortest_dist = dist
+                    chosen_sub_res = sub_res[0]
+        if chosen_sub_res == None: #If all options are not between either ref_res a or ref_res b subjects, choose the one with shortest distance
+            for sub_res in init[ref_res]:
+                dist = min([abs(sub_res[0]-fin[a]), abs(sub_res[0]-fin[b])]):
+
+
+    else:
+        sys.exit()
+
+
+    return fin, init
+
+
 
 
     
@@ -397,13 +479,16 @@ if __name__ == '__main__':
         print(pdb_file)
         for item in conserved_res:
             print(item, conserved_res[item])
+        print(final_alignment)
         print("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
         #All Single and Double-correlation pairs are exhausted. Align by sequence relative to aligned residues
         while True:
+            unchanged = len(conserved_res)
             for item in conserved_res:
                 print(item, conserved_res[item], "\t", ref_data[item][0], sub_data[conserved_res[item][0][0]][0], sub_data[conserved_res[item][1][0]][0])
             final_alignment, conserved_res = remove_sequential_pairs(final_alignment, conserved_res)
-            if len(conserved_res) == 1:
+
+            if len(conserved_res) == unchanged:
                 print(conserved_res)
                 break
 
