@@ -276,6 +276,23 @@ def remove_double_pairs(fin, init):
 
     return fin, init
 
+def remove_sequential_pairs(fin, init):
+    aligned_res = list(fin.keys())
+    print(fin)
+    ref_res = next(iter(init)) 
+    i = 1
+    while i <= 15: #Find nearest aligned res within up to 15 positions of ref index
+        a,b = ref_res-i, ref_res+i
+        
+        if a in aligned_res or b in aligned_res:
+            break
+        else:
+            i+=1
+
+
+    
+    sys.exit()
+
 if __name__ == '__main__':
     
     #Retrieve conserved sequence positions from the MSA
@@ -377,7 +394,17 @@ if __name__ == '__main__':
             print("*********************************************************************************")
             if len(final_alignment) == unchanged_single_double:
                 break
-        
-        #All Single and Double-correlation pairs are exhausted. Align by sequence
+        print(pdb_file)
+        for item in conserved_res:
+            print(item, conserved_res[item])
+        print("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+        #All Single and Double-correlation pairs are exhausted. Align by sequence relative to aligned residues
+        while True:
+            for item in conserved_res:
+                print(item, conserved_res[item], "\t", ref_data[item][0], sub_data[conserved_res[item][0][0]][0], sub_data[conserved_res[item][1][0]][0])
+            final_alignment, conserved_res = remove_sequential_pairs(final_alignment, conserved_res)
+            if len(conserved_res) == 1:
+                print(conserved_res)
+                break
 
-        sys.exit() 
+
