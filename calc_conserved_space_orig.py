@@ -157,41 +157,21 @@ def rotate_coords(df, mat):
         df[res][1] = [rotated_mat[0][0], rotated_mat[1][0], rotated_mat[2][0]] #Save results to XYZ positions
     return df
 
-def identify_reference_points_in_space(df):
-    #Find the X/Y/Z dimension with largest difference/range 
-    max_xyz = [df[0][1][0], df[0][1][1], df[0][1][2]]
-    min_xyz= [df[0][1][0], df[0][1][1], df[0][1][2]]
-    for item in df:
-        max_xyz = [max([max_xyz[0], df[item][1][0]]), max([max_xyz[1], df[item][1][1]]), max([max_xyz[2], df[item][1][2]])]
-        min_xyz = [min([min_xyz[0], df[item][1][0]]), min([min_xyz[1], df[item][1][1]]), min([min_xyz[2], df[item]    [1][2]])]
-    range_xyz = [x-y for x,y in zip(max_xyz,min_xyz)]
-    largest_index = range_xyz.index(max(range_xyz)) #Average points into left/right half of largest range
-    largest_midpoint = max_xyz[largest_index]-(0.5*range_xyz[largest_index])
-    
-    left_half = []
-    right_half = []
-    for item in df:
-        if df[item][1][largest_index] < largest_midpoint:
-            left_half.append([df[item][1][0], df[item][1][1], df[item][1][2]])
-        else:
-            right_half.append([df[item][1][0], df[item][1][1], df[item][1][2]])
-    lh = [sum(x)/len(x) for x in zip(*left_half)]
-    rh = [sum(x)/len(x) for x in zip(*right_half)]
-    return lh, rh
-
-    return rp, rn
-def calc_vectors_and_cos_sim(df, point1, point2, com, ref):
+def calc_vectors_and_cos_sim(df, index_i, index_j, com, ref):
 
     def vector_magnitude(xyz):
         return ((xyz[0]**2)+(xyz[1]**2)+(xyz[2]**2))**0.5
 
     def cos_similarity(v1_xyz, v2_xyz, v1_mag, v2_mag): #1 is most similar, 0 is least similar
+        if v1_mag == 0 or v2_mag == 0: #NEED TO FIGURE ALTERNATIVE SIMILARITY MEASURE SINCE MAGS FOR SOME VECTORS ARE 0
+            return 0.0 
+        else:
             return np.dot(v1_xyz, v2_xyz) / (v1_mag*v2_mag)
 
     res_in_threshold = defaultdict(list)
     for res in df:
-        v_1 = [x-y for x,y in zip(df[res][1], point1)] #Difference between XYZs of each residue to conserved distant res1
-        v_2 = [x-y for x,y in zip(df[res][1], point2)] #Difference between XYZs of each residue to conserved distant res2
+        v_1 = [x-y for x,y in zip(df[res][1], df[index_i][1])] #Difference between XYZs of each residue to conserved distant res1
+        v_2 = [x-y for x,y in zip(df[res][1], df[index_j][1])] #Difference between XYZs of each residue to conserved distant res2
         v_com = [x-y for x,y in zip(df[res][1], com)] #Difference between XYZs of each residue to COM
         v_1_mag = vector_magnitude(v_1)
         v_2_mag = vector_magnitude(v_2)
@@ -399,6 +379,12 @@ def remove_sequential_pairs(fin, init):
 
     return fin, init
 
+
+
+
+    
+    sys.exit()
+
 if __name__ == '__main__':
     
     #Retrieve conserved sequence positions from the MSA
@@ -440,8 +426,7 @@ if __name__ == '__main__':
     
     #Calculate reference vectors and vector properties - replace header&footer info
     #New dict format: { Index: [resnum, [X, Y, Z], [v1_x, v1_y, v1_z, v1_mag], [v2_x, v2_y, v2_z, v2_mag], [com_x, com_y, com_z, com_mag] ] ...}
-    ref_P1, ref_P2 = identify_reference_points_in_space(ref_data)
-    ref_data = calc_vectors_and_cos_sim(ref_data, ref_P1, ref_P2, ref_COM, None)
+    ref_data = calc_vectors_and_cos_sim(ref_data, ref_distant_res_i, ref_distant_res_j, ref_COM, None)
 
 
     #Extract info and calculate properties for each non-reference subject structure
@@ -475,12 +460,12 @@ if __name__ == '__main__':
         #Calculate subject vectors and vector properties - replace header&footer info
         #Also calculate vector magnitude differences and cosine similarities to reference structure
         #Store residues within similarity threshold. Format: {ref_res_index: [ [sub_res_index, vector_mag_diff] ...] }
-        sub_data, conserved_res = calc_vectors_and_cos_sim(sub_data, ref_P1, ref_P2, sub_COM, ref_data)
+        sub_data, conserved_res = calc_vectors_and_cos_sim(sub_data, sub_distant_res_i, sub_distant_res_j, sub_COM, ref_data)
 
         final_alignment = defaultdict(dict)
         for item in conserved_res:
             print(item, conserved_res[item])
-        print("*****")
+            print("*****")
         while True: #Remove Single and Double-correlation pairs
             unchanged_single_double = len(final_alignment)
             
@@ -493,10 +478,11 @@ if __name__ == '__main__':
                 print("~~~~~~~~~~~~~~~~~~~~~")
                 if len(final_alignment) == unchanged_single:
                     break
-            print(pdb_file)
+            
             for item in final_alignment:
                 print("distance (model aligned-"+args.ref.split(".")[0]," and res", ref_data[item][0],"), (model aligned-"+pdb_file.split(".")[0]," and res", sub_data[final_alignment[item]][0],")")
             sys.exit()
+            
             #Align double-correlation pairs
             final_alignment, conserved_res = remove_double_pairs(final_alignment, conserved_res)
             for item in conserved_res:
@@ -506,7 +492,7 @@ if __name__ == '__main__':
                 break
         print(pdb_file)
         for item in conserved_res:
-            print(item, sub_data[conserved_res[item]])
+            print(item, sub_pdb[conserved_res[item]])
         print(final_alignment)
         print("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
         #All Single and Double-correlation pairs are exhausted. Align by sequence relative to aligned residues
