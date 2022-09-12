@@ -2,6 +2,7 @@
 import os, sys
 import argparse, math
 import numpy as np
+import pandas as pd
 from pathlib import Path
 from collections import defaultdict
 
@@ -9,6 +10,7 @@ parser = argparse.ArgumentParser(description='Computes spatially correlated resi
 parser.add_argument('listfile', type=str, help='Name of a file containing the list of PDB (path/)files to be processed, with (path/)names on newlines')
 parser.add_argument('msa', type=str, help='Name of the Multiple Sequence Alignment file in ClustalW format')
 parser.add_argument('ref', type=str, help='Name of the PDB file to serve as a reference for the vector analysis')
+parser.add_argument('-save', type=str, default='results.csv', help='Name of .csv results file to generate, default results.csv')
 parser.add_argument('-noalign', action='store_true', help='If flag is given, the program will not align the vectors according to most distant conserved residue positioning')
 parser.add_argument('-store', type=str, default='processed_pdbs', help='Name of the directory to generate to store the processed PDBs (default: processed_pdbs)')
 parser.add_argument('-pylog', action='store_const', const='pymol_commands.log', help='Name of the file to generate pymol commands of')
@@ -202,6 +204,8 @@ def calc_vectors_and_cos_sim(df, index_i, index_j, com, ref):
 
     res_in_threshold = defaultdict(list)
     for res in df:
+        resname = df[res][2][17:20]
+
         v_1 = [(x-y+0.001) for x,y in zip(df[res][1], df[index_i][1])] #Difference between XYZs of each residue to conserved distant res1
         v_2 = [(x-y+0.001) for x,y in zip(df[res][1], df[index_j][1])] #Difference between XYZs of each residue to conserved distant res2
         v_com = [(x-y+0.001) for x,y in zip(df[res][1], com)] #Difference between XYZs of each residue to COM
@@ -215,6 +219,7 @@ def calc_vectors_and_cos_sim(df, index_i, index_j, com, ref):
         df[res][2] = v_1
         df[res][3] = v_2
         df[res].append(v_com)
+        df[res].append(resname)
 
         if ref == None: continue #If reference structure not provided, do not proceed
 
@@ -236,7 +241,7 @@ def calc_vectors_and_cos_sim(df, index_i, index_j, com, ref):
             compare_v2 = calc_TS_SS(v_2[:3], r[3][:3])
             compare_com = calc_TS_SS(v_com[:3], r[4][:3])
             if (compare_v1+compare_v2+compare_com)/3 < 0.1:
-                res_in_threshold[ref_res].append([res, (compare_v1+compare_v2+compare_com)/3])
+                res_in_threshold[ref_res].append([res, (compare_v1+compare_v2+compare_com)/3, resname])
 
     if ref == None:
         return df
@@ -440,7 +445,101 @@ def remove_sequential_pairs(fin, init):
             del init[res]
 
     return fin, init
-    
+
+granthams = {'SER': {'ARG':110, 'LEU':145, 'PRO':74, 'THR':58, 'ALA':99, 'VAL':124,
+                     'GLY':56, 'ILE':142, 'PHE':155, 'TYR':144, 'CYS':112, 'HIS':89,
+                     'GLN':68, 'ASN':46, 'LYS':121, 'ASP':65, 'GLU':80, 'MET':135,
+                     'TRP':177, 'SER':0, '':0, 'MSE':135},
+             'ARG':{'SER':110, 'LEU':102, 'PRO':103, 'THR':71, 'ALA':112, 'VAL':96,
+                     'GLY':125, 'ILE':97, 'PHE':97, 'TYR':77, 'CYS':180, 'HIS':29,
+                     'GLN':43, 'ASN':86, 'LYS':26, 'ASP':96, 'GLU':54, 'MET':91,
+                     'TRP':101, 'ARG':0, '':0, 'MSE':91},
+             'LEU':{'SER':145, 'ARG':102, 'PRO':98, 'THR':92, 'ALA':96, 'VAL':32,
+                     'GLY':138, 'ILE':5, 'PHE':22, 'TYR':36, 'CYS':198, 'HIS':99,
+                     'GLN':113, 'ASN':153, 'LYS':107, 'ASP':172, 'GLU':138, 'MET':15,
+                     'TRP':61, 'LEU':0, '':0, 'MSE':15},
+             'PRO':{'SER':74,'ARG':103, 'LEU':98, 'THR':38, 'ALA':27, 'VAL':68,
+                     'GLY':42, 'ILE':95, 'PHE':114, 'TYR':110, 'CYS':169, 'HIS':77,
+                     'GLN':76, 'ASN':91, 'LYS':103, 'ASP':108, 'GLU':93, 'MET':87,
+                     'TRP':147, 'PRO':0, '':0, 'MSE':87},
+             'THR':{'SER':58, 'ARG':71, 'LEU':92, 'PRO':38, 'ALA':58, 'VAL':69,
+                     'GLY':59, 'ILE':89, 'PHE':103, 'TYR':92, 'CYS':149, 'HIS':47,
+                     'GLN':42, 'ASN':65, 'LYS':78, 'ASP':85, 'GLU':65, 'MET':81,
+                     'TRP':128, 'THR':0, '':0, 'MSE':81},
+             'ALA':{'SER':99, 'ARG':112, 'LEU':96, 'PRO':27, 'THR':58, 'VAL':64,
+                     'GLY':60, 'ILE':94, 'PHE':113, 'TYR':112, 'CYS':195, 'HIS':86,
+                     'GLN':91, 'ASN':111, 'LYS':106, 'ASP':126, 'GLU':107, 'MET':84,
+                     'TRP':148, 'ALA':0, '':0 ,'MSE':84},
+             'VAL':{'SER':124, 'ARG':96, 'LEU':32, 'PRO':68, 'THR':69, 'ALA':64,
+                     'GLY':109, 'ILE':29, 'PHE':50, 'TYR':55, 'CYS':192, 'HIS':84,
+                     'GLN':96, 'ASN':133, 'LYS':97, 'ASP':152, 'GLU':121, 'MET':21,
+                     'TRP':88, 'VAL':0, '':0, 'MSE':21},
+             'GLY':{'SER':56, 'ARG':125, 'LEU':138, 'PRO':42, 'THR':59, 'ALA':60,
+                    'VAL':109, 'ILE':135, 'PHE':153, 'TYR':147, 'CYS':159, 'HIS':98,
+                    'GLN':87, 'ASN':80, 'LYS':127, 'ASP':94, 'GLU':98, 'MET':127,
+                    'TRP':184, 'GLY':0, '':0, 'MSE':127},
+             'ILE':{'SER':142, 'ARG':97, 'LEU':5, 'PRO':95, 'THR':89, 'ALA':94,
+                    'VAL':29, 'GLY':135, 'PHE':21, 'TYR':33, 'CYS':198, 'HIS':94,
+                    'GLN':109, 'ASN':149, 'LYS':102, 'ASP':168, 'GLU':134, 'MET':10,
+                    'TRP':61, 'ILE':0, '':0, 'MSE':10},
+             'PHE':{'SER':155, 'ARG':97, 'LEU':22, 'PRO':114, 'THR':103, 'ALA':113,
+                    'VAL':50, 'GLY':153, 'ILE':21, 'TYR':22, 'CYS':205, 'HIS':100,
+                    'GLN':116, 'ASN':158, 'LYS':102, 'ASP':177, 'GLU':140, 'MET':28,
+                    'TRP':40, 'PHE':0, '':0, 'MSE':28},
+             'TYR':{'SER':144, 'ARG':77, 'LEU':36, 'PRO':110, 'THR':92, 'ALA':112,
+                    'VAL':55, 'GLY':147, 'ILE':33, 'PHE':22, 'CYS':194, 'HIS':83,
+                    'GLN':99, 'ASN':143, 'LYS':85, 'ASP':160, 'GLU':122, 'MET':36,
+                    'TRP':37, 'TYR':0, '':0, 'MSE':36},
+             'CYS':{'SER':112, 'ARG':180, 'LEU':198, 'PRO':169, 'THR':149, 'ALA':195,
+                    'VAL':192, 'GLY':159, 'ILE':198, 'PHE':205, 'TYR':194, 'HIS':174,
+                    'GLN':154, 'ASN':139, 'LYS':202, 'ASP':154, 'GLU':170, 'MET':196,
+                    'TRP':215, 'CYS':0, '':0, 'MSE':196},
+             'HIS':{'SER':89, 'ARG':29, 'LEU':99, 'PRO':77, 'THR':47, 'ALA':86,
+                    'VAL':84, 'GLY':98, 'ILE':94, 'PHE':100, 'TYR':83, 'CYS':174,
+                    'GLN':24, 'ASN':68, 'LYS':32, 'ASP':81, 'GLU':40, 'MET':87,
+                    'TRP':115, 'HIS':0, '':0, 'MSE':87},
+             'GLN':{'SER':68, 'ARG':43, 'LEU':113, 'PRO':76, 'THR':42, 'ALA':91,
+                    'VAL':96, 'GLY':87, 'ILE':109, 'PHE':116, 'TYR':99, 'CYS':154,
+                    'HIS':24, 'ASN':46, 'LYS':53, 'ASP':61, 'GLU':29, 'MET':101,
+                    'TRP':130, 'GLN':0, '':0, 'MSE':101},
+             'ASN':{'SER':46, 'ARG':86, 'LEU':153, 'PRO':91, 'THR':65, 'ALA':111,
+                    'VAL':133, 'GLY':80, 'ILE':149, 'PHE':158, 'TYR':143, 'CYS':139,
+                    'HIS':68, 'GLN':46, 'LYS':94, 'ASP':23, 'GLU':42, 'MET':142,
+                    'TRP':174, 'ASN':0, '':0, 'MSE':142},
+             'LYS':{'SER':121, 'ARG':26, 'LEU':107, 'PRO':103, 'THR':78, 'ALA':106,
+                    'VAL':97, 'GLY':127, 'ILE':102, 'PHE':102, 'TYR':85, 'CYS':202,
+                    'HIS':32, 'GLN':53, 'ASN':94, 'ASP':101, 'GLU':56, 'MET':95,
+                    'TRP':110, 'LYS':0, '':0, 'MSE':95},
+             'ASP':{'SER':65, 'ARG':96, 'LEU':172, 'PRO':108, 'THR':85, 'ALA':126,
+                    'VAL':152, 'GLY':94, 'ILE':168, 'PHE':177, 'TYR':160, 'CYS':154,
+                    'HIS':81, 'GLN':61, 'ASN':23, 'LYS':101, 'GLU':45, 'MET':160,
+                    'TRP':181, 'ASP':0, '':0, 'MSE':160},
+             'GLU':{'SER':80, 'ARG':54, 'LEU':138, 'PRO':93, 'THR':65, 'ALA':107,
+                    'VAL':121, 'GLY':98, 'ILE':134, 'PHE':140, 'TYR':122, 'CYS':170,
+                    'HIS':40, 'GLN':29, 'ASN':42, 'LYS':56, 'ASP':45, 'MET':126,
+                    'TRP':152, 'GLU':0, '':0, 'MSE':126},
+             'MET':{'SER':135, 'ARG':91, 'LEU':15, 'PRO':87, 'THR':81, 'ALA':84,
+                    'VAL':21, 'GLY':127, 'ILE':10, 'PHE':28, 'TYR':36, 'CYS':196,
+                    'HIS':87, 'GLN':101, 'ASN':142, 'LYS':95, 'ASP':160, 'GLU':126,
+                    'TRP':67, 'MET':0, '':0, 'MSE':0},
+             'MSE':{'SER':135, 'ARG':91, 'LEU':15, 'PRO':87, 'THR':81, 'ALA':84,
+                    'VAL':21, 'GLY':127, 'ILE':10, 'PHE':28, 'TYR':36, 'CYS':196,
+                    'HIS':87, 'GLN':101, 'ASN':142, 'LYS':95, 'ASP':160, 'GLU':126,
+                    'TRP':67, 'MET':0, '':0, 'MSE':0},
+             'TRP':{'SER':177, 'ARG':101, 'LEU':61, 'PRO':147, 'THR':128, 'ALA':148,
+                    'VAL':88, 'GLY':184, 'ILE':61, 'PHE':40, 'TYR':37, 'CYS':215,
+                    'HIS':115, 'GLN':130, 'ASN':174, 'LYS':110, 'ASP':181, 'GLU':152,
+                    'MET':67, 'TRP':0, '':0, 'MSE':67}}
+
+def calc_score(row, dist):
+    orig = row[0]
+    score = 0
+    for col in row[1:]:
+        if pd.isnull(col):
+            continue #"Adding" 0 to score for missing residues
+        else:
+            score += dist[orig][col]
+    return score
 
 if __name__ == '__main__':
     
@@ -482,9 +581,13 @@ if __name__ == '__main__':
                 savefile.write(ref_data[res][2]+"{:>8}".format(round(ref_data[res][1][0],3))+"{:>8}".format(round(ref_data[res][1][1],3))+"{:>8}".format(round(ref_data[res][1][2],3))+ref_data[res][3])
     
     #Calculate reference vectors and vector properties - replace header&footer info
-    #New dict format: { Index: [resnum, [X, Y, Z], [v1_x, v1_y, v1_z, v1_mag], [v2_x, v2_y, v2_z, v2_mag], [com_x, com_y, com_z, com_mag] ] ...}
+    #New dict format: { Index: [resnum, [X, Y, Z], [v1_x, v1_y, v1_z, v1_mag], [v2_x, v2_y, v2_z, v2_mag], [com_x, com_y, com_z, com_mag], ResName] ...}
     ref_data = calc_vectors_and_cos_sim(ref_data, ref_distant_res_i, ref_distant_res_j, ref_COM, None)
 
+    #Initialize alignment storage dictionary
+    results_dataframe = defaultdict(dict)
+    for pos in ref_data:
+        results_dataframe[args.ref][ref_data[pos][0]] = ref_data[pos][5]
 
     #Extract info and calculate properties for each non-reference subject structure
     for pdb_file in [x for x in pdb_files if x != args.ref]:
@@ -518,8 +621,10 @@ if __name__ == '__main__':
         #Also calculate vector magnitude differences and cosine similarities to reference structure
         #Store residues within similarity threshold. Format: {ref_res_index: [ [sub_res_index, vector_mag_diff] ...] }
         sub_data, conserved_res = calc_vectors_and_cos_sim(sub_data, sub_distant_res_i, sub_distant_res_j, sub_COM, ref_data)
-
-        final_alignment = defaultdict(dict)
+        
+        #sub_res_type = {sub_data[x][0]:sub_data[x][5] for x in sub_data} #Isolate Resname info
+        
+        final_alignment = defaultdict(list)
 
         #Remove tight-correlation pairs
         final_alignment, conserved_res = remove_tight_pairs(final_alignment, conserved_res, 0.03)
@@ -546,10 +651,20 @@ if __name__ == '__main__':
 
             if len(conserved_res) == unchanged or len(conserved_res) == 0:
                 break
+
+        #Store the results
         if args.pylog:
             with open(args.pylog, 'w') as logfile:
                 for item in final_alignment:
+                    results_dataframe[pdb_file][ref_data[item][0]] = sub_data[final_alignment[item]][5]
                     logfile.write("distance (model aligned-"+args.ref.split(".")[0]+" and res"+str(ref_data[item][0])+"), (model aligned-"+pdb_file.split(".")[0]+" and res"+str(sub_data[final_alignment[item]][0])+")\n")
-
+        else:
+            for item in final_alignment:
+                results_dataframe[pdb_file][ref_data[item][0]] = sub_data[final_alignment[item]][5]
         
-
+    #Generate the a dataframe of the aligned results
+    results_dataframe = pd.DataFrame(results_dataframe)
+    results_dataframe['Score'] = results_dataframe.apply(lambda x: calc_score(x, granthams), axis=1)
+    results_dataframe['MSCC'] = results_dataframe['Score'] * (results_dataframe.drop('Score',axis=1).nunique(axis=1) / results_dataframe.drop('Score',axis=1).count(axis=1))
+    results_dataframe['SOR'] = results_dataframe.drop(columns=['Score','MSCC'],axis=1).count(axis=1)/(len(results_dataframe.keys())-2)
+    results_dataframe.to_csv(args.save)
