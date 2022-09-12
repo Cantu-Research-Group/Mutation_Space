@@ -13,6 +13,8 @@ parser.add_argument('ref', type=str, help='Name of the PDB file to serve as a re
 parser.add_argument('-save', type=str, default='results.csv', help='Name of .csv results file to generate, default results.csv')
 parser.add_argument('-noalign', action='store_true', help='If flag is given, the program will not align the vectors according to most distant conserved residue positioning')
 parser.add_argument('-store', type=str, default='processed_pdbs', help='Name of the directory to generate to store the processed PDBs (default: processed_pdbs)')
+parser.add_argument('-criteria', type=float, default=0.1, help='Threshold for TS-SS similarity, default=0.1')
+parser.add_argument('-tightcriteria', type=float, default=0.03, help='Threshold for TS-SS similarity tight convergence for immediate alignment, default=0.03')
 parser.add_argument('-pylog', action='store_const', const='pymol_commands.log', help='Name of the file to generate pymol commands of')
 args = parser.parse_args()
 
@@ -159,7 +161,7 @@ def rotate_coords(df, mat):
         df[res][1] = [rotated_mat[0][0], rotated_mat[1][0], rotated_mat[2][0]] #Save results to XYZ positions
     return df
 
-def calc_vectors_and_cos_sim(df, index_i, index_j, com, ref):
+def calc_vectors_and_cos_sim(df, index_i, index_j, com, ref, threshold):
 
     def vector_magnitude(xyz):
         return ((xyz[0]**2)+(xyz[1]**2)+(xyz[2]**2))**0.5
@@ -240,7 +242,7 @@ def calc_vectors_and_cos_sim(df, index_i, index_j, com, ref):
             compare_v1 = calc_TS_SS(v_1[:3], r[2][:3])
             compare_v2 = calc_TS_SS(v_2[:3], r[3][:3])
             compare_com = calc_TS_SS(v_com[:3], r[4][:3])
-            if (compare_v1+compare_v2+compare_com)/3 < 0.1:
+            if (compare_v1+compare_v2+compare_com)/3 < threshold:
                 res_in_threshold[ref_res].append([res, (compare_v1+compare_v2+compare_com)/3, resname])
 
     if ref == None:
@@ -582,7 +584,7 @@ if __name__ == '__main__':
     
     #Calculate reference vectors and vector properties - replace header&footer info
     #New dict format: { Index: [resnum, [X, Y, Z], [v1_x, v1_y, v1_z, v1_mag], [v2_x, v2_y, v2_z, v2_mag], [com_x, com_y, com_z, com_mag], ResName] ...}
-    ref_data = calc_vectors_and_cos_sim(ref_data, ref_distant_res_i, ref_distant_res_j, ref_COM, None)
+    ref_data = calc_vectors_and_cos_sim(ref_data, ref_distant_res_i, ref_distant_res_j, ref_COM, None, args.criteria)
 
     #Initialize alignment storage dictionary
     results_dataframe = defaultdict(dict)
@@ -620,20 +622,20 @@ if __name__ == '__main__':
         #Calculate subject vectors and vector properties - replace header&footer info
         #Also calculate vector magnitude differences and cosine similarities to reference structure
         #Store residues within similarity threshold. Format: {ref_res_index: [ [sub_res_index, vector_mag_diff] ...] }
-        sub_data, conserved_res = calc_vectors_and_cos_sim(sub_data, sub_distant_res_i, sub_distant_res_j, sub_COM, ref_data)
+        sub_data, conserved_res = calc_vectors_and_cos_sim(sub_data, sub_distant_res_i, sub_distant_res_j, sub_COM, ref_data, args.criteria)
         
         #sub_res_type = {sub_data[x][0]:sub_data[x][5] for x in sub_data} #Isolate Resname info
         
         final_alignment = defaultdict(list)
 
         #Remove tight-correlation pairs
-        final_alignment, conserved_res = remove_tight_pairs(final_alignment, conserved_res, 0.03)
+        final_alignment, conserved_res = remove_tight_pairs(final_alignment, conserved_res, args.tightcriteria)
 
-        while True: #Remove Single and Double-correlation pairs
+        while len(conserved_res) > 0: #Remove Single and Double-correlation pairs
             unchanged_single_double = len(final_alignment)
             
             #Align single-correlation pairs
-            while True:
+            while len(conserved_res) > 0:
                 unchanged_single = len(final_alignment)
                 final_alignment, conserved_res = remove_single_pairs(final_alignment, conserved_res)
                 if len(final_alignment) == unchanged_single:
@@ -645,10 +647,9 @@ if __name__ == '__main__':
                 break
         
         #All Single and Double-correlation pairs are exhausted. Align by sequence relative to aligned residues
-        while True:
+        while len(conserved_res) > 0:
             unchanged = len(conserved_res)
             final_alignment, conserved_res = remove_sequential_pairs(final_alignment, conserved_res)
-
             if len(conserved_res) == unchanged or len(conserved_res) == 0:
                 break
 
