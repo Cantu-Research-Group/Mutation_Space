@@ -1,8 +1,7 @@
 #!/usr/bin/env python
 import os, sys
-import argparse
+import argparse, math
 import numpy as np
-import pandas as pd
 from pathlib import Path
 from collections import defaultdict
 
@@ -12,6 +11,7 @@ parser.add_argument('msa', type=str, help='Name of the Multiple Sequence Alignme
 parser.add_argument('ref', type=str, help='Name of the PDB file to serve as a reference for the vector analysis')
 parser.add_argument('-noalign', action='store_true', help='If flag is given, the program will not align the vectors according to most distant conserved residue positioning')
 parser.add_argument('-store', type=str, default='processed_pdbs', help='Name of the directory to generate to store the processed PDBs (default: processed_pdbs)')
+parser.add_argument('-pylog', action='store_const', const='pymol_commands.log', help='Name of the file to generate pymol commands of')
 args = parser.parse_args()
 
 def retrieve_cons_indices(fname): 
@@ -168,11 +168,43 @@ def calc_vectors_and_cos_sim(df, index_i, index_j, com, ref):
         else:
             return np.dot(v1_xyz, v2_xyz) / (v1_mag*v2_mag)
 
+    def calc_TS_SS(v1_xyz, v2_xyz):
+        def Cosine(vec1, vec2) :
+            result = InnerProduct(vec1,vec2) / (VectorSize(vec1) * VectorSize(vec2))
+            return result
+
+        def VectorSize(vec) :
+            return math.sqrt(sum(math.pow(v,2) for v in vec))
+
+        def InnerProduct(vec1, vec2) :
+            return sum(v1*v2 for v1,v2 in zip(vec1,vec2))
+
+        def Euclidean(vec1, vec2) :
+            return math.sqrt(sum(math.pow((v1-v2),2) for v1,v2 in zip(vec1, vec2)))
+
+        def Theta(vec1, vec2) :
+            return math.acos(Cosine(vec1,vec2)) + math.radians(10)
+
+        def Triangle(vec1, vec2) :
+            theta = math.radians(Theta(vec1,vec2))
+            return (VectorSize(vec1) * VectorSize(vec2) * math.sin(theta)) / 2
+
+        def Magnitude_Difference(vec1, vec2) :
+            return abs(VectorSize(vec1) - VectorSize(vec2))
+
+        def Sector(vec1, vec2) :
+            ED = Euclidean(vec1, vec2)
+            MD = Magnitude_Difference(vec1, vec2)
+            theta = Theta(vec1, vec2)
+            return math.pi * math.pow((ED+MD),2) * theta/360
+
+        return Triangle(v1_xyz, v2_xyz) * Sector(v1_xyz, v2_xyz)
+
     res_in_threshold = defaultdict(list)
     for res in df:
-        v_1 = [x-y for x,y in zip(df[res][1], df[index_i][1])] #Difference between XYZs of each residue to conserved distant res1
-        v_2 = [x-y for x,y in zip(df[res][1], df[index_j][1])] #Difference between XYZs of each residue to conserved distant res2
-        v_com = [x-y for x,y in zip(df[res][1], com)] #Difference between XYZs of each residue to COM
+        v_1 = [(x-y+0.001) for x,y in zip(df[res][1], df[index_i][1])] #Difference between XYZs of each residue to conserved distant res1
+        v_2 = [(x-y+0.001) for x,y in zip(df[res][1], df[index_j][1])] #Difference between XYZs of each residue to conserved distant res2
+        v_com = [(x-y+0.001) for x,y in zip(df[res][1], com)] #Difference between XYZs of each residue to COM
         v_1_mag = vector_magnitude(v_1)
         v_2_mag = vector_magnitude(v_2)
         v_com_mag = vector_magnitude(v_com)
@@ -197,13 +229,47 @@ def calc_vectors_and_cos_sim(df, index_i, index_j, com, ref):
             avg_cos_sim = (v_1_cos_sim + v_2_cos_sim + v_com_cos_sim)/3
 
             #If similarities between residues are within threshold, store the value
-            if vec_mag_diff < 2.6 * avg_cos_sim - 1.35:
-                res_in_threshold[ref_res].append([res, vec_mag_diff])
+            #if vec_mag_diff < 2.6 * avg_cos_sim - 1.35:
+            #    res_in_threshold[ref_res].append([res, vec_mag_diff])
+            #res_in_threshold[ref_res].append([res, vec_mag_diff])
+            compare_v1 = calc_TS_SS(v_1[:3], r[2][:3])
+            compare_v2 = calc_TS_SS(v_2[:3], r[3][:3])
+            compare_com = calc_TS_SS(v_com[:3], r[4][:3])
+            if (compare_v1+compare_v2+compare_com)/3 < 0.1:
+                res_in_threshold[ref_res].append([res, (compare_v1+compare_v2+compare_com)/3])
 
     if ref == None:
         return df
     else:
         return df, res_in_threshold
+
+def remove_tight_pairs(fin, init, threshold):
+    res_in_threshold = defaultdict(list)
+    for ref_res in init: #Gather info of subject residues with tightest correlations within threshold for each ref_res
+        tightest_res = None
+        tightest_val = None
+        for sub_res in init[ref_res]:
+            if sub_res[1] <= threshold:
+                if tightest_res == None:
+                    tightest_res = sub_res[0]
+                    tightest_val = sub_res[1]
+                elif sub_res[1] <= threshold and sub_res[1] <= tightest_val:
+                    tightest_res = sub_res[0]
+                    tightest_val = sub_res[1]
+        if tightest_res != None:
+            res_in_threshold[tightest_res].append(ref_res)
+
+    for sub_res in list(res_in_threshold):
+        if len(res_in_threshold[sub_res])==1: #If subject residue has within-threshold correlation with only 1 ref residue, add to alignment
+            fin[res_in_threshold[sub_res][0]] = sub_res
+            del init[res_in_threshold[sub_res][0]]
+        else:
+            del res_in_threshold[sub_res]
+    for ref_res in init: #Remove used subject residues from available remaining multi-correlated residues
+        init[ref_res] = [x for x in init[ref_res] if x[0] not in list(res_in_threshold)]
+
+    return fin, init
+
 
 def remove_single_pairs(fin, init):
     res_of_singles = defaultdict(list)
@@ -225,11 +291,11 @@ def remove_single_pairs(fin, init):
             fin[best_res] = sub_res
             for ref_res in res_of_singles[sub_res]:
                 del init[ref_res]
-
-    for ref_res in init: #Remove used subject residues from available remaining multi-correlated residues
-        for pair in init[ref_res]:
-            if pair[0] in list(res_of_singles.keys()): 
-                init[ref_res].remove(pair)
+    for ref_res in list(init): #Remove used subject residues from available remaining multi-correlated residues
+        if not init[ref_res]: #Remove any empty elements
+            del init[ref_res]
+            continue
+        init[ref_res] = [x for x in init[ref_res] if x[0] not in list(res_of_singles)]
 
     return fin, init
 
@@ -270,9 +336,10 @@ def remove_double_pairs(fin, init):
             del init[res_of_doubles[sub_res][1]]
 
     for ref_res in init: #Remove used subject residues from available remaining multi-correlated residues
-        for pair in init[ref_res]:
-            if pair[0] in sub_res_to_remove:
-                init[ref_res].remove(pair)
+        if not init[ref_res]: #Remove any empty elements
+            del init[ref_res]
+            continue
+        init[ref_res] = [x for x in init[ref_res] if x[0] not in sub_res_to_remove]
 
     return fin, init
 
@@ -297,7 +364,6 @@ def remove_sequential_pairs(fin, init):
         else:
             i+=1
 
-    print(a, b, a_bool, b_bool)
     chosen_sub_res = None
     shortest_dist = None
     if a_bool == False and b_bool == True: #Case where only upper bound ref_res was found for comparison
@@ -310,19 +376,14 @@ def remove_sequential_pairs(fin, init):
                 elif dist < shortest_dist:
                     shortest_dist = dist
                     chosen_sub_res = sub_res[0]
-        if chosen_sub_res == None: #If all options are only larger than ref_res subject, identify subject residue with shortest reverse sequential distance to ref_res subject
+        if chosen_sub_res == None: #If all options are only larger than ref_res subject, identify subject residue with shortest vector factor
             for sub_res in init[ref_res]:
-                dist = sub_res[0]-fin[b]
                 if shortest_dist == None:
-                    shortest_dist = dist
+                    shortest_dist = sub_res[1]
                     chosen_sub_res = sub_res[0]
-                elif dist < shortest_dist:
-                    shortest_dist = dist
+                elif sub_res[1] < shortest_dist:
+                    shortest_dist = sub_res[1]
                     chosen_sub_res = sub_res[0]
-        fin[ref_res] = chosen_sub_res
-        del init[ref_res]
-        print(fin)
-        return fin, init
 
     elif a_bool == True and b_bool == False: #Case where only the lower bound ref_res was found for comparison
         for sub_res in init[ref_res]: #Identify subject residue (larger than ref_res subject) and (with shortest sequential dist to ref_res subject)
@@ -334,19 +395,14 @@ def remove_sequential_pairs(fin, init):
                 elif dist < shortest_dist:
                     shortest_dist = dist
                     chosen_sub_res = sub_res[0]
-        if chosen_sub_res == None: #If all options are only smaller than ref_res subject, identify subject residue with shortest reverse sequential distance to ref_res subject
+        if chosen_sub_res == None: #If all options are only smaller than ref_res subject, choose subject residue with shortest vector factor
             for sub_res in init[ref_res]:
-                dist = fin[a]-sub_res[0]
                 if shortest_dist == None:
-                    shortest_dist = dist
+                    shortest_dist = sub_res[1]
                     chosen_sub_res = sub_res[0]
-                elif dist < shortest_dist:
-                    shortest_dist = dist
+                elif sub_res[1] < shortest_dist:
+                    shortest_dist = sub_res[1]
                     chosen_sub_res = sub_res[0]
-        fin[ref_res] = chosen_sub_res
-        del init[ref_res]
-        print(fin)
-        return fin, init
 
     elif a_bool == True and b_bool == True:
         for sub_res in init[ref_res]: #Identify subject residue between both ref_res a and ref_res b subjects
@@ -358,32 +414,33 @@ def remove_sequential_pairs(fin, init):
                 elif dist < shortest_dist:
                     shortest_dist = dist
                     chosen_sub_res = sub_res[0]
-        #if chosen_sub_res == None: #If all options are not between either ref_res a or ref_res b subjects, choose the one with shortest distance
-          #  for sub_res in init[ref_res]:
-            #    dist = min([abs(sub_res[0]-fin[a]), abs(sub_res[0]-fin[b])])
-             #   if chose_sub_res == None:
-             #       shortest_dist = dist
-             #       chosen_sub_res = sub_res[0]
-             #   elif dist < shortest_dist:
-             #       shortest_dist = dist
-             #       chosen_sub_res = sub_res[0]
-        #fin[ref_res] = chosen_sub_res
-        #del init[ref_res]
-        #print(fin)
-        #return fin, init
+        if chosen_sub_res == None: #If all options are not between either ref_res a or ref_res b subjects, choose the one with smallest vector factor
+            for sub_res in init[ref_res]:
+                if chosen_sub_res == None:
+                    shortest_dist = sub_res[1]
+                    chosen_sub_res = sub_res[0]
+                elif sub_res[1] < shortest_dist:
+                    shortest_dist = sub_res[1]
+                    chosen_sub_res = sub_res[0]
+        
     else: #If there are no other aligned res within 15 of the residue, choose the smallest vector mag diff
-    #    for sub_res in init[ref_res]:
-    #        if 
-        sys.exit()
+        for sub_res in init[ref_res]:
+            if chosen_sub_res == None:
+                shortest_dist = sub_res[1]
+                chosen_sub_res = sub_res[0]
+            elif sub_res[1] < shortest_dist:
+                shortest_dist = sub_res[1]
+                chosen_sub_res = sub_res[0]
 
+    fin[ref_res] = chosen_sub_res
+    del init[ref_res]
+    for res in init:
+        init[res] = [x for x in init[res] if x[0] != chosen_sub_res]
+        if not init[res]:
+            del init[res]
 
     return fin, init
-
-
-
-
     
-    sys.exit()
 
 if __name__ == '__main__':
     
@@ -463,9 +520,10 @@ if __name__ == '__main__':
         sub_data, conserved_res = calc_vectors_and_cos_sim(sub_data, sub_distant_res_i, sub_distant_res_j, sub_COM, ref_data)
 
         final_alignment = defaultdict(dict)
-        for item in conserved_res:
-            print(item, conserved_res[item])
-            print("*****")
+
+        #Remove tight-correlation pairs
+        final_alignment, conserved_res = remove_tight_pairs(final_alignment, conserved_res, 0.03)
+
         while True: #Remove Single and Double-correlation pairs
             unchanged_single_double = len(final_alignment)
             
@@ -473,38 +531,25 @@ if __name__ == '__main__':
             while True:
                 unchanged_single = len(final_alignment)
                 final_alignment, conserved_res = remove_single_pairs(final_alignment, conserved_res)
-                for item in conserved_res:
-                    print(item, conserved_res[item])
-                print("~~~~~~~~~~~~~~~~~~~~~")
                 if len(final_alignment) == unchanged_single:
                     break
             
-            for item in final_alignment:
-                print("distance (model aligned-"+args.ref.split(".")[0]," and res", ref_data[item][0],"), (model aligned-"+pdb_file.split(".")[0]," and res", sub_data[final_alignment[item]][0],")")
-            sys.exit()
-            
             #Align double-correlation pairs
             final_alignment, conserved_res = remove_double_pairs(final_alignment, conserved_res)
-            for item in conserved_res:
-                print(item, conserved_res[item])
-            print("*********************************************************************************")
             if len(final_alignment) == unchanged_single_double:
                 break
-        print(pdb_file)
-        for item in conserved_res:
-            print(item, sub_pdb[conserved_res[item]])
-        print(final_alignment)
-        print("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+        
         #All Single and Double-correlation pairs are exhausted. Align by sequence relative to aligned residues
         while True:
-            sys.exit()
             unchanged = len(conserved_res)
-            for item in conserved_res:
-                print(item, conserved_res[item], "\t", ref_data[item][0], sub_data[conserved_res[item][0][0]][0], sub_data[conserved_res[item][1][0]][0])
             final_alignment, conserved_res = remove_sequential_pairs(final_alignment, conserved_res)
 
-            if len(conserved_res) == unchanged:
-                print(conserved_res)
+            if len(conserved_res) == unchanged or len(conserved_res) == 0:
                 break
+        if args.pylog:
+            with open(args.pylog, 'w') as logfile:
+                for item in final_alignment:
+                    logfile.write("distance (model aligned-"+args.ref.split(".")[0]+" and res"+str(ref_data[item][0])+"), (model aligned-"+pdb_file.split(".")[0]+" and res"+str(sub_data[final_alignment[item]][0])+")\n")
 
+        
 
