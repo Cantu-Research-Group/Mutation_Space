@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 import os, sys
-import argparse
+import argparse, math, distances
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -9,9 +9,14 @@ from collections import defaultdict
 parser = argparse.ArgumentParser(description='Computes spatially correlated residues based. Spatial alignment of the proteins is done based upon positioning of most conserved distant residues reported in sequence-aligned file, though this can be disabled to use user-aligned structures.')
 parser.add_argument('listfile', type=str, help='Name of a file containing the list of PDB (path/)files to be processed, with (path/)names on newlines')
 parser.add_argument('msa', type=str, help='Name of the Multiple Sequence Alignment file in ClustalW format')
-parser.add_argument('ref', type=str, help='Name of the PDB file to serve as a reference for the vector analysis')
+parser.add_argument('ref', nargs = '+', help='(Path/)Name of the PDB file to serve as a reference for the vector analysis. If using non-"A" protein chain, indicate after name (e.g. A123.pdb B)')
+parser.add_argument('-save', type=str, default='results.xlsx', help='Name of .xlsx results file to generate, default results.xlsx')
 parser.add_argument('-noalign', action='store_true', help='If flag is given, the program will not align the vectors according to most distant conserved residue positioning')
 parser.add_argument('-store', type=str, default='processed_pdbs', help='Name of the directory to generate to store the processed PDBs (default: processed_pdbs)')
+parser.add_argument('-criteria', type=float, default=0.1, help='Threshold for TS-SS similarity, default=0.1')
+parser.add_argument('-tightcriteria', type=float, default=0.03, help='Threshold for TS-SS similarity tight convergence for immediate alignment, default=0.03')
+parser.add_argument('-pydist', action='store_const', const='pymol_distances.log', help='Name of the file to store pymol commands used to interconnect correlated atoms of')
+parser.add_argument('-pyheat', action='store_const', const='pymol_heatmap.log', help='Name of the file to store pymol commands used to adjust B-factor values for coloring structure heatmaps')
 args = parser.parse_args()
 
 def retrieve_cons_indices(fname): 
@@ -40,11 +45,12 @@ def retrieve_cons_indices(fname):
 
 def check_files_present(pdbs_list, names_msa):
     for name in pdbs_list:
-        if Path(name).is_file() == False: #Confirm PDB files present
-            print("WARNING: Could not locate file {0}".format(name))
+        check_name = name.split()[0]
+        if Path(check_name).is_file() == False: #Confirm PDB files present
+            print("WARNING: Could not locate file {0}".format(check_name))
             pdbs_list.remove(name)
-        elif (name not in names_msa) and (name.split("/")[-1] not in names_msa): #Confirm PDBs have corresponding MSA info present
-            print("WARNING: Could not identify sequence alignment for file {0}".format(name))
+        elif (check_name not in names_msa) and (check_name.split("/")[-1] not in names_msa): #Confirm PDBs have corresponding MSA info present
+            print("WARNING: Could not identify sequence alignment for file {0}".format(check_name))
             pdbs_list.remove(name)
     return pdbs_list
 
@@ -52,15 +58,17 @@ def check_files_present(pdbs_list, names_msa):
 def extract_and_save_CAs(file_name, save_dir):
     #Extract coordinate info
     coords_lines = defaultdict(list)
-    with open(file_name, 'r') as readpdb:
+    if len(file_name) == 1:
+        chain = 'A'
+    else:
+        chain = file_name[1]
+    with open(file_name[0], 'r') as readpdb:
         for line in readpdb:
-            if line.startswith('TER'):    #Terminate at first TER sign
-                break
-            elif (line.startswith('ATOM') and line[12:16].strip() == "CA") or (line.startswith('HETATM') and line[12:16].strip() == "CA"):
+            if (line.startswith('ATOM') and line[12:16].strip() == "CA" and line[21] == chain) or (line.startswith('HETATM') and line[12:16].strip() == "CA" and line[21] == chain):
                 coords_lines[int(line[22:26])].append(line)    #Save the CA lines according to ResNum
     #Write coords to PDB
     xyz_coords = defaultdict(list)
-    with open(save_dir+"/"+file_name.rsplit("/",1)[-1], 'w') as savepdb:
+    with open(save_dir+"/"+file_name[0].rsplit("/",1)[-1], 'w') as savepdb:
         for resnum in coords_lines:
             if len(coords_lines[resnum]) != 1:   #Average alternate conformation atoms based upon Occupancy
                 header = coords_lines[resnum][0][:30]
@@ -157,42 +165,56 @@ def rotate_coords(df, mat):
         df[res][1] = [rotated_mat[0][0], rotated_mat[1][0], rotated_mat[2][0]] #Save results to XYZ positions
     return df
 
-def identify_reference_points_in_space(df):
-    #Find the X/Y/Z dimension with largest difference/range 
-    max_xyz = [df[0][1][0], df[0][1][1], df[0][1][2]]
-    min_xyz= [df[0][1][0], df[0][1][1], df[0][1][2]]
-    for item in df:
-        max_xyz = [max([max_xyz[0], df[item][1][0]]), max([max_xyz[1], df[item][1][1]]), max([max_xyz[2], df[item][1][2]])]
-        min_xyz = [min([min_xyz[0], df[item][1][0]]), min([min_xyz[1], df[item][1][1]]), min([min_xyz[2], df[item]    [1][2]])]
-    range_xyz = [x-y for x,y in zip(max_xyz,min_xyz)]
-    largest_index = range_xyz.index(max(range_xyz)) #Average points into left/right half of largest range
-    largest_midpoint = max_xyz[largest_index]-(0.5*range_xyz[largest_index])
-    
-    left_half = []
-    right_half = []
-    for item in df:
-        if df[item][1][largest_index] < largest_midpoint:
-            left_half.append([df[item][1][0], df[item][1][1], df[item][1][2]])
-        else:
-            right_half.append([df[item][1][0], df[item][1][1], df[item][1][2]])
-    lh = [sum(x)/len(x) for x in zip(*left_half)]
-    rh = [sum(x)/len(x) for x in zip(*right_half)]
-    return lh, rh
-
-    return rp, rn
-def calc_vectors_and_cos_sim(df, point1, point2, com, ref):
+def calc_vectors_and_cos_sim(df, index_i, index_j, com, ref, threshold):
 
     def vector_magnitude(xyz):
         return ((xyz[0]**2)+(xyz[1]**2)+(xyz[2]**2))**0.5
 
     def cos_similarity(v1_xyz, v2_xyz, v1_mag, v2_mag): #1 is most similar, 0 is least similar
+        if v1_mag == 0 or v2_mag == 0: #NEED TO FIGURE ALTERNATIVE SIMILARITY MEASURE SINCE MAGS FOR SOME VECTORS ARE 0
+            return 0.0 
+        else:
             return np.dot(v1_xyz, v2_xyz) / (v1_mag*v2_mag)
+
+    def calc_TS_SS(v1_xyz, v2_xyz):
+        def Cosine(vec1, vec2) :
+            result = InnerProduct(vec1,vec2) / (VectorSize(vec1) * VectorSize(vec2))
+            return result
+
+        def VectorSize(vec) :
+            return math.sqrt(sum(math.pow(v,2) for v in vec))
+
+        def InnerProduct(vec1, vec2) :
+            return sum(v1*v2 for v1,v2 in zip(vec1,vec2))
+
+        def Euclidean(vec1, vec2) :
+            return math.sqrt(sum(math.pow((v1-v2),2) for v1,v2 in zip(vec1, vec2)))
+
+        def Theta(vec1, vec2) :
+            return math.acos(round(Cosine(vec1,vec2),10)) + math.radians(10)
+
+        def Triangle(vec1, vec2) :
+            theta = math.radians(Theta(vec1,vec2))
+            return (VectorSize(vec1) * VectorSize(vec2) * math.sin(theta)) / 2
+
+        def Magnitude_Difference(vec1, vec2) :
+            return abs(VectorSize(vec1) - VectorSize(vec2))
+
+        def Sector(vec1, vec2) :
+            ED = Euclidean(vec1, vec2)
+            MD = Magnitude_Difference(vec1, vec2)
+            theta = Theta(vec1, vec2)
+            return math.pi * math.pow((ED+MD),2) * theta/360
+
+        return Triangle(v1_xyz, v2_xyz) * Sector(v1_xyz, v2_xyz)
 
     res_in_threshold = defaultdict(list)
     for res in df:
-        v_1 = [x-y for x,y in zip(df[res][1], point1)] #Difference between XYZs of each residue to conserved distant res1
-        v_2 = [x-y for x,y in zip(df[res][1], point2)] #Difference between XYZs of each residue to conserved distant res2
-        v_com = [x-y for x,y in zip(df[res][1], com)] #Difference between XYZs of each residue to COM
+        resname = df[res][2][17:20]
+
+        v_1 = [(x-y+0.001) for x,y in zip(df[res][1], df[index_i][1])] #Difference between XYZs of each residue to conserved distant res1
+        v_2 = [(x-y+0.001) for x,y in zip(df[res][1], df[index_j][1])] #Difference between XYZs of each residue to conserved distant res2
+        v_com = [(x-y+0.001) for x,y in zip(df[res][1], com)] #Difference between XYZs of each residue to COM
         v_1_mag = vector_magnitude(v_1)
         v_2_mag = vector_magnitude(v_2)
         v_com_mag = vector_magnitude(v_com)
@@ -203,6 +225,7 @@ def calc_vectors_and_cos_sim(df, point1, point2, com, ref):
         df[res][2] = v_1
         df[res][3] = v_2
         df[res].append(v_com)
+        df[res].append(resname)
 
         if ref == None: continue #If reference structure not provided, do not proceed
 
@@ -217,13 +240,47 @@ def calc_vectors_and_cos_sim(df, point1, point2, com, ref):
             avg_cos_sim = (v_1_cos_sim + v_2_cos_sim + v_com_cos_sim)/3
 
             #If similarities between residues are within threshold, store the value
-            if vec_mag_diff < 2.6 * avg_cos_sim - 1.35:
-                res_in_threshold[ref_res].append([res, vec_mag_diff])
+            #if vec_mag_diff < 2.6 * avg_cos_sim - 1.35:
+            #    res_in_threshold[ref_res].append([res, vec_mag_diff])
+            #res_in_threshold[ref_res].append([res, vec_mag_diff])
+            compare_v1 = calc_TS_SS(v_1[:3], r[2][:3])
+            compare_v2 = calc_TS_SS(v_2[:3], r[3][:3])
+            compare_com = calc_TS_SS(v_com[:3], r[4][:3])
+            if (compare_v1+compare_v2+compare_com)/3 < threshold:
+                res_in_threshold[ref_res].append([res, (compare_v1+compare_v2+compare_com)/3, resname])
 
     if ref == None:
         return df
     else:
         return df, res_in_threshold
+
+def remove_tight_pairs(fin, init, threshold):
+    res_in_threshold = defaultdict(list)
+    for ref_res in init: #Gather info of subject residues with tightest correlations within threshold for each ref_res
+        tightest_res = None
+        tightest_val = None
+        for sub_res in init[ref_res]:
+            if sub_res[1] <= threshold:
+                if tightest_res == None:
+                    tightest_res = sub_res[0]
+                    tightest_val = sub_res[1]
+                elif sub_res[1] <= threshold and sub_res[1] <= tightest_val:
+                    tightest_res = sub_res[0]
+                    tightest_val = sub_res[1]
+        if tightest_res != None:
+            res_in_threshold[tightest_res].append(ref_res)
+
+    for sub_res in list(res_in_threshold):
+        if len(res_in_threshold[sub_res])==1: #If subject residue has within-threshold correlation with only 1 ref residue, add to alignment
+            fin[res_in_threshold[sub_res][0]] = sub_res
+            del init[res_in_threshold[sub_res][0]]
+        else:
+            del res_in_threshold[sub_res]
+    for ref_res in init: #Remove used subject residues from available remaining multi-correlated residues
+        init[ref_res] = [x for x in init[ref_res] if x[0] not in list(res_in_threshold)]
+
+    return fin, init
+
 
 def remove_single_pairs(fin, init):
     res_of_singles = defaultdict(list)
@@ -245,11 +302,11 @@ def remove_single_pairs(fin, init):
             fin[best_res] = sub_res
             for ref_res in res_of_singles[sub_res]:
                 del init[ref_res]
-
-    for ref_res in init: #Remove used subject residues from available remaining multi-correlated residues
-        for pair in init[ref_res]:
-            if pair[0] in list(res_of_singles.keys()): 
-                init[ref_res].remove(pair)
+    for ref_res in list(init): #Remove used subject residues from available remaining multi-correlated residues
+        if not init[ref_res]: #Remove any empty elements
+            del init[ref_res]
+            continue
+        init[ref_res] = [x for x in init[ref_res] if x[0] not in list(res_of_singles)]
 
     return fin, init
 
@@ -290,9 +347,10 @@ def remove_double_pairs(fin, init):
             del init[res_of_doubles[sub_res][1]]
 
     for ref_res in init: #Remove used subject residues from available remaining multi-correlated residues
-        for pair in init[ref_res]:
-            if pair[0] in sub_res_to_remove:
-                init[ref_res].remove(pair)
+        if not init[ref_res]: #Remove any empty elements
+            del init[ref_res]
+            continue
+        init[ref_res] = [x for x in init[ref_res] if x[0] not in sub_res_to_remove]
 
     return fin, init
 
@@ -317,7 +375,6 @@ def remove_sequential_pairs(fin, init):
         else:
             i+=1
 
-    print(a, b, a_bool, b_bool)
     chosen_sub_res = None
     shortest_dist = None
     if a_bool == False and b_bool == True: #Case where only upper bound ref_res was found for comparison
@@ -330,19 +387,14 @@ def remove_sequential_pairs(fin, init):
                 elif dist < shortest_dist:
                     shortest_dist = dist
                     chosen_sub_res = sub_res[0]
-        if chosen_sub_res == None: #If all options are only larger than ref_res subject, identify subject residue with shortest reverse sequential distance to ref_res subject
+        if chosen_sub_res == None: #If all options are only larger than ref_res subject, identify subject residue with shortest vector factor
             for sub_res in init[ref_res]:
-                dist = sub_res[0]-fin[b]
                 if shortest_dist == None:
-                    shortest_dist = dist
+                    shortest_dist = sub_res[1]
                     chosen_sub_res = sub_res[0]
-                elif dist < shortest_dist:
-                    shortest_dist = dist
+                elif sub_res[1] < shortest_dist:
+                    shortest_dist = sub_res[1]
                     chosen_sub_res = sub_res[0]
-        fin[ref_res] = chosen_sub_res
-        del init[ref_res]
-        print(fin)
-        return fin, init
 
     elif a_bool == True and b_bool == False: #Case where only the lower bound ref_res was found for comparison
         for sub_res in init[ref_res]: #Identify subject residue (larger than ref_res subject) and (with shortest sequential dist to ref_res subject)
@@ -354,19 +406,14 @@ def remove_sequential_pairs(fin, init):
                 elif dist < shortest_dist:
                     shortest_dist = dist
                     chosen_sub_res = sub_res[0]
-        if chosen_sub_res == None: #If all options are only smaller than ref_res subject, identify subject residue with shortest reverse sequential distance to ref_res subject
+        if chosen_sub_res == None: #If all options are only smaller than ref_res subject, choose subject residue with shortest vector factor
             for sub_res in init[ref_res]:
-                dist = fin[a]-sub_res[0]
                 if shortest_dist == None:
-                    shortest_dist = dist
+                    shortest_dist = sub_res[1]
                     chosen_sub_res = sub_res[0]
-                elif dist < shortest_dist:
-                    shortest_dist = dist
+                elif sub_res[1] < shortest_dist:
+                    shortest_dist = sub_res[1]
                     chosen_sub_res = sub_res[0]
-        fin[ref_res] = chosen_sub_res
-        del init[ref_res]
-        print(fin)
-        return fin, init
 
     elif a_bool == True and b_bool == True:
         for sub_res in init[ref_res]: #Identify subject residue between both ref_res a and ref_res b subjects
@@ -378,26 +425,42 @@ def remove_sequential_pairs(fin, init):
                 elif dist < shortest_dist:
                     shortest_dist = dist
                     chosen_sub_res = sub_res[0]
-        #if chosen_sub_res == None: #If all options are not between either ref_res a or ref_res b subjects, choose the one with shortest distance
-          #  for sub_res in init[ref_res]:
-            #    dist = min([abs(sub_res[0]-fin[a]), abs(sub_res[0]-fin[b])])
-             #   if chose_sub_res == None:
-             #       shortest_dist = dist
-             #       chosen_sub_res = sub_res[0]
-             #   elif dist < shortest_dist:
-             #       shortest_dist = dist
-             #       chosen_sub_res = sub_res[0]
-        #fin[ref_res] = chosen_sub_res
-        #del init[ref_res]
-        #print(fin)
-        #return fin, init
+        if chosen_sub_res == None: #If all options are not between either ref_res a or ref_res b subjects, choose the one with smallest vector factor
+            for sub_res in init[ref_res]:
+                if chosen_sub_res == None:
+                    shortest_dist = sub_res[1]
+                    chosen_sub_res = sub_res[0]
+                elif sub_res[1] < shortest_dist:
+                    shortest_dist = sub_res[1]
+                    chosen_sub_res = sub_res[0]
+        
     else: #If there are no other aligned res within 15 of the residue, choose the smallest vector mag diff
-    #    for sub_res in init[ref_res]:
-    #        if 
-        sys.exit()
+        for sub_res in init[ref_res]:
+            if chosen_sub_res == None:
+                shortest_dist = sub_res[1]
+                chosen_sub_res = sub_res[0]
+            elif sub_res[1] < shortest_dist:
+                shortest_dist = sub_res[1]
+                chosen_sub_res = sub_res[0]
 
+    fin[ref_res] = chosen_sub_res
+    del init[ref_res]
+    for res in init:
+        init[res] = [x for x in init[res] if x[0] != chosen_sub_res]
+        if not init[res]:
+            del init[res]
 
     return fin, init
+
+def calc_score(row, dist):
+    orig = row[0]
+    score = 0
+    for col in row[1:]:
+        if pd.isnull(col):
+            continue #"Adding" 0 to score for missing residues
+        else:
+            score += dist[orig][col]
+    return score
 
 if __name__ == '__main__':
     
@@ -411,12 +474,16 @@ if __name__ == '__main__':
     #Generate the PDB storage directory if it is not present:
     if Path(args.store).is_dir() == False:
         os.mkdir(args.store)
+    #Remove previous pymol logfiles if going to generate them
+    if args.pydist:
+        try: os.remove(args.pydist)
+        except OSError: pass
 
     #Extract reference/target structure information
     ref_data = extract_and_save_CAs(args.ref, args.store)
     
     #Calculate the reference/target averaged XYZ center of mass/geometry of all conserved residues & Identify distant conserved res
-    ref_COM, ref_distant_res_i, ref_distant_res_j = calculate_COM_and_distances(ref_data, conserved_res_indices[args.ref])
+    ref_COM, ref_distant_res_i, ref_distant_res_j = calculate_COM_and_distances(ref_data, conserved_res_indices[args.ref[0].split("/")[-1]])
 
     #If doing conserved alignment
     if args.noalign == False:
@@ -433,25 +500,32 @@ if __name__ == '__main__':
         ref_data = rotate_coords(ref_data, rotation_matrix_Z)
         
         #Save the altered coordinates
-        with open(args.store+"/aligned-"+args.ref.rsplit("/",1)[-1], 'w') as savefile:
+        with open(args.store+"/aligned-"+args.ref[0].rsplit("/",1)[-1], 'w') as savefile:
             for res in ref_data:
                 #Save header + rounded X + rounded Y + rounded Z + footer
                 savefile.write(ref_data[res][2]+"{:>8}".format(round(ref_data[res][1][0],3))+"{:>8}".format(round(ref_data[res][1][1],3))+"{:>8}".format(round(ref_data[res][1][2],3))+ref_data[res][3])
     
     #Calculate reference vectors and vector properties - replace header&footer info
-    #New dict format: { Index: [resnum, [X, Y, Z], [v1_x, v1_y, v1_z, v1_mag], [v2_x, v2_y, v2_z, v2_mag], [com_x, com_y, com_z, com_mag] ] ...}
-    ref_P1, ref_P2 = identify_reference_points_in_space(ref_data)
-    ref_data = calc_vectors_and_cos_sim(ref_data, ref_P1, ref_P2, ref_COM, None)
+    #New dict format: { Index: [resnum, [X, Y, Z], [v1_x, v1_y, v1_z, v1_mag], [v2_x, v2_y, v2_z, v2_mag], [com_x, com_y, com_z, com_mag], ResName] ...}
+    ref_data = calc_vectors_and_cos_sim(ref_data, ref_distant_res_i, ref_distant_res_j, ref_COM, None, args.criteria)
 
+    #Initialize alignment storage dictionary
+    results_dataframe = defaultdict(dict)
+    results_dataframe_resnum = defaultdict(dict)
+    for pos in ref_data:
+        results_dataframe[args.ref[0]][ref_data[pos][0]] = ref_data[pos][5]
+        results_dataframe_resnum[args.ref[0]][ref_data[pos][0]] = ref_data[pos][0]
 
     #Extract info and calculate properties for each non-reference subject structure
-    for pdb_file in [x for x in pdb_files if x != args.ref]:
+    for pdb_file in [x.split() for x in pdb_files]:
+        if pdb_file[0] == args.ref[0]: continue
+        print("Processing structure: {}".format(pdb_file[0].split("/")[-1]))
         
         #Extract subject CA positions data, and save CAs to storage directory
         sub_data = extract_and_save_CAs(pdb_file, args.store)
-       
+        
         #Extract subject averaged XYZ center of mass/geometry of all conserved residues & Identify distant conserved res
-        sub_COM, sub_distant_res_i, sub_distant_res_j = calculate_COM_and_distances(sub_data, conserved_res_indices[pdb_file])
+        sub_COM, sub_distant_res_i, sub_distant_res_j = calculate_COM_and_distances(sub_data, conserved_res_indices[pdb_file[0].split("/")[-1]])
 
         #If doing conserved alignment
         if args.noalign == False:
@@ -468,57 +542,78 @@ if __name__ == '__main__':
             sub_data = rotate_coords(sub_data, rotation_matrix_Z)
 
             #Save the altered coordinates
-            with open(args.store+"/aligned-"+pdb_file.rsplit("/",1)[-1], 'w') as savefile:
+            with open(args.store+"/aligned-"+pdb_file[0].rsplit("/",1)[-1], 'w') as savefile:
                 for res in sub_data:
                     savefile.write(sub_data[res][2]+"{:>8}".format(round(sub_data[res][1][0],3))+"{:>8}".format(round(sub_data[res][1][1],3))+"{:>8}".format(round(sub_data[res][1][2],3))+sub_data[res][3])
         
         #Calculate subject vectors and vector properties - replace header&footer info
         #Also calculate vector magnitude differences and cosine similarities to reference structure
         #Store residues within similarity threshold. Format: {ref_res_index: [ [sub_res_index, vector_mag_diff] ...] }
-        sub_data, conserved_res = calc_vectors_and_cos_sim(sub_data, ref_P1, ref_P2, sub_COM, ref_data)
+        sub_data, conserved_res = calc_vectors_and_cos_sim(sub_data, sub_distant_res_i, sub_distant_res_j, sub_COM, ref_data, args.criteria)
+        
+        #sub_res_type = {sub_data[x][0]:sub_data[x][5] for x in sub_data} #Isolate Resname info
+        
+        final_alignment = defaultdict(list)
 
-        final_alignment = defaultdict(dict)
-        for item in conserved_res:
-            print(item, conserved_res[item])
-        print("*****")
-        while True: #Remove Single and Double-correlation pairs
+        #Remove tight-correlation pairs
+        final_alignment, conserved_res = remove_tight_pairs(final_alignment, conserved_res, args.tightcriteria)
+
+        while len(conserved_res) > 0: #Remove Single and Double-correlation pairs
             unchanged_single_double = len(final_alignment)
             
             #Align single-correlation pairs
-            while True:
+            while len(conserved_res) > 0:
                 unchanged_single = len(final_alignment)
                 final_alignment, conserved_res = remove_single_pairs(final_alignment, conserved_res)
-                for item in conserved_res:
-                    print(item, conserved_res[item])
-                print("~~~~~~~~~~~~~~~~~~~~~")
                 if len(final_alignment) == unchanged_single:
                     break
-            print(pdb_file)
-            for item in final_alignment:
-                print("distance (model aligned-"+args.ref.split(".")[0]," and res", ref_data[item][0],"), (model aligned-"+pdb_file.split(".")[0]," and res", sub_data[final_alignment[item]][0],")")
-            sys.exit()
+            
             #Align double-correlation pairs
             final_alignment, conserved_res = remove_double_pairs(final_alignment, conserved_res)
-            for item in conserved_res:
-                print(item, conserved_res[item])
-            print("*********************************************************************************")
             if len(final_alignment) == unchanged_single_double:
                 break
-        print(pdb_file)
-        for item in conserved_res:
-            print(item, sub_data[conserved_res[item]])
-        print(final_alignment)
-        print("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+        
         #All Single and Double-correlation pairs are exhausted. Align by sequence relative to aligned residues
-        while True:
-            sys.exit()
+        while len(conserved_res) > 0:
             unchanged = len(conserved_res)
-            for item in conserved_res:
-                print(item, conserved_res[item], "\t", ref_data[item][0], sub_data[conserved_res[item][0][0]][0], sub_data[conserved_res[item][1][0]][0])
             final_alignment, conserved_res = remove_sequential_pairs(final_alignment, conserved_res)
-
-            if len(conserved_res) == unchanged:
-                print(conserved_res)
+            if len(conserved_res) == unchanged or len(conserved_res) == 0:
                 break
 
+        #Store the results
+        if args.pydist:
+            with open(args.pydist, 'a') as logfile:
+                for item in final_alignment:
+                    results_dataframe[pdb_file[0].split("/")[-1]][ref_data[item][0]] = sub_data[final_alignment[item]][5]
+                    results_dataframe_resnum[pdb_file[0].split("/")[-1]][ref_data[item][0]] = sub_data[final_alignment[item]][0]
+                    logfile.write("distance (model aligned-{} and res {}), (model aligned-{} and res {})\n".format(args.ref[0].split("/")[-1].split(".")[0], ref_data[item][0], pdb_file[0].split("/")[-1].split(".")[0], sub_data[final_alignment[item]][0]))
+        else:
+            for item in final_alignment:
+                results_dataframe[pdb_file[0]][ref_data[item][0]] = sub_data[final_alignment[item]][5]
+                results_dataframe_resnum[pdb_file[0]][ref_data[item][0]] = sub_data[final_alignment[item]][0]
+        
+    #Generate the dataframes of the aligned results
+    results_dataframe = pd.DataFrame(results_dataframe)
+    results_dataframe['Score'] = results_dataframe.apply(lambda x: calc_score(x, distances.granthams), axis=1)
+    results_dataframe['MSCC'] = results_dataframe['Score'] * (results_dataframe.drop('Score',axis=1).nunique(axis=1) / results_dataframe.drop('Score',axis=1).count(axis=1))
+    results_dataframe['SOR'] = results_dataframe.drop(columns=['Score','MSCC'],axis=1).count(axis=1)/(len(results_dataframe.keys())-2)
 
+    results_dataframe_resnum = pd.DataFrame(results_dataframe_resnum)
+    results_dataframe_resnum['MSCC'] = results_dataframe['MSCC']
+    results_dataframe_resnum['MSCC_norm'] = ( (results_dataframe_resnum['MSCC']-results_dataframe_resnum['MSCC'].min()) / (results_dataframe_resnum['MSCC'].max()-results_dataframe_resnum['MSCC'].min()))*100
+    
+    #Save results to excel file
+    with pd.ExcelWriter(args.save) as savefile:
+        results_dataframe.to_excel(savefile, sheet_name='ResID', index=False)
+        results_dataframe_resnum.to_excel(savefile, sheet_name='ResNum', index=False)
+
+    #Generate optional MSCC heatmap pymol commands
+    if args.pyheat:
+        def write_heatmap(row, names, savefile):
+            for i in range(0,len(row)-2):
+                if pd.isnull(row[i]): continue
+                else:
+                    savefile.write("alter (model {} and res {}), b= {}\n".format(names[i].split("/")[-1].split(".")[0], int(row[i]), round(row[-1],2)))
+
+        with open(args.pyheat, 'w') as logfile:
+            results_dataframe_resnum.apply(lambda x: write_heatmap(x, x.keys(), logfile), axis=1)
