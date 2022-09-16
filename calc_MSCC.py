@@ -594,7 +594,7 @@ if __name__ == '__main__':
         
     #Generate the dataframes of the aligned results
     results_dataframe = pd.DataFrame(results_dataframe)
-    results_dataframe['Score'] = results_dataframe.apply(lambda x: calc_score(x, distances.granthams), axis=1)
+    results_dataframe['Score'] = results_dataframe.apply(lambda x: calc_score(x, scoring_matrix.granthams), axis=1)
     results_dataframe['MSCC'] = results_dataframe['Score'] * ((results_dataframe.drop('Score',axis=1).nunique(axis=1)-1) / (results_dataframe.drop('Score',axis=1).count(axis=1)-1))
     results_dataframe['SOR'] = (results_dataframe.drop(columns=['Score','MSCC'],axis=1).count(axis=1)-1)/(len(results_dataframe.keys())-2)
 
