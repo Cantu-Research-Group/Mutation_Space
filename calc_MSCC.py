@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 import os, sys
-import argparse, math, distances
+import argparse, math, scoring_matrix
 import numpy as np
 import pandas as pd
 from pathlib import Path
