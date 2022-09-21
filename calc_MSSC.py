@@ -6,7 +6,7 @@ import pandas as pd
 from pathlib import Path
 from collections import defaultdict
 
-parser = argparse.ArgumentParser(description='Computes spatially correlated residues based. Spatial alignment of the proteins is done based upon positioning of most conserved distant residues reported in sequence-aligned file, though this can be disabled to use user-aligned structures.')
+parser = argparse.ArgumentParser(description='Identifies spatially correlated residues and calculates their MSSC scores. Spatial alignment of the proteins is done based upon positioning of most conserved distant residues reported in sequence-aligned file, though this can be disabled to use user-aligned structures.')
 parser.add_argument('listfile', type=str, help='Name of a file containing the list of PDB (path/)files to be processed, with (path/)names on newlines')
 parser.add_argument('msa', type=str, help='Name of the Multiple Sequence Alignment file in ClustalW format')
 parser.add_argument('ref', nargs = '+', help='(Path/)Name of the PDB file to serve as a reference for the vector analysis. If using non-"A" protein chain, indicate after name (e.g. A123.pdb B)')
@@ -165,48 +165,29 @@ def rotate_coords(df, mat):
         df[res][1] = [rotated_mat[0][0], rotated_mat[1][0], rotated_mat[2][0]] #Save results to XYZ positions
     return df
 
-def calc_vectors_and_cos_sim(df, index_i, index_j, com, ref, threshold):
+def calc_vectors_sim(df, index_i, index_j, com, ref, threshold):
 
     def vector_magnitude(xyz):
-        return ((xyz[0]**2)+(xyz[1]**2)+(xyz[2]**2))**0.5
+        return math.sqrt(sum(math.pow(i,2) for i in xyz))
 
-    def cos_similarity(v1_xyz, v2_xyz, v1_mag, v2_mag): #1 is most similar, 0 is least similar
-        if v1_mag == 0 or v2_mag == 0: #NEED TO FIGURE ALTERNATIVE SIMILARITY MEASURE SINCE MAGS FOR SOME VECTORS ARE 0
-            return 0.0 
-        else:
-            return np.dot(v1_xyz, v2_xyz) / (v1_mag*v2_mag)
+    def calc_TS_SS(v1_xyz, v2_xyz): #TS-SS algorithm referenced from DOI: 10.1109/BigDataService.2016.14
+        def calc_vec_cosine(v1, v2) :
+            return sum(i*j for i,j in zip(v1,v2)) / (vector_magnitude(v1) * vector_magnitude(v2))
 
-    def calc_TS_SS(v1_xyz, v2_xyz):
-        def Cosine(vec1, vec2) :
-            result = InnerProduct(vec1,vec2) / (VectorSize(vec1) * VectorSize(vec2))
-            return result
+        def calc_theta(v1, v2) :
+            return math.acos(round(calc_vec_cosine(v1,v2),10)) + math.radians(10)
 
-        def VectorSize(vec) :
-            return math.sqrt(sum(math.pow(v,2) for v in vec))
+        def calc_triangle(v1, v2) :
+            angle = math.radians(calc_theta(v1,v2))
+            return (vector_magnitude(v1) * vector_magnitude(v2) * math.sin(angle)) / 2
 
-        def InnerProduct(vec1, vec2) :
-            return sum(v1*v2 for v1,v2 in zip(vec1,vec2))
+        def calc_sector(v1, v2) :
+            euclid_dist = math.sqrt(sum(math.pow((i-j),2) for i,j in zip(v1, v2)))
+            mag_diff = abs(vector_magnitude(v1)-vector_magnitude(v2))
+            angle = calc_theta(v1, v2)
+            return math.pi * math.pow((euclid_dist+mag_diff),2) * angle/360
 
-        def Euclidean(vec1, vec2) :
-            return math.sqrt(sum(math.pow((v1-v2),2) for v1,v2 in zip(vec1, vec2)))
-
-        def Theta(vec1, vec2) :
-            return math.acos(round(Cosine(vec1,vec2),10)) + math.radians(10)
-
-        def Triangle(vec1, vec2) :
-            theta = math.radians(Theta(vec1,vec2))
-            return (VectorSize(vec1) * VectorSize(vec2) * math.sin(theta)) / 2
-
-        def Magnitude_Difference(vec1, vec2) :
-            return abs(VectorSize(vec1) - VectorSize(vec2))
-
-        def Sector(vec1, vec2) :
-            ED = Euclidean(vec1, vec2)
-            MD = Magnitude_Difference(vec1, vec2)
-            theta = Theta(vec1, vec2)
-            return math.pi * math.pow((ED+MD),2) * theta/360
-
-        return Triangle(v1_xyz, v2_xyz) * Sector(v1_xyz, v2_xyz)
+        return calc_triangle(v1_xyz, v2_xyz) * calc_sector(v1_xyz, v2_xyz)
 
     res_in_threshold = defaultdict(list)
     for res in df:
@@ -231,18 +212,8 @@ def calc_vectors_and_cos_sim(df, index_i, index_j, com, ref, threshold):
 
         for ref_res in ref:
             r = ref[ref_res]
-            #Calculate average Vector Magnitude Differences to each reference residue
-            vec_mag_diff = (((r[2][3]-v_1_mag)**2 + (r[3][3]-v_2_mag)**2 + (r[4][3]-v_com_mag)**2 ) / 3)**0.5
-            #Calculate average Vector Cosine Similarity to each reference residue
-            v_1_cos_sim = cos_similarity(v_1[:3], r[2][:3], v_1_mag, r[2][3])
-            v_2_cos_sim = cos_similarity(v_2[:3], r[3][:3], v_2_mag, r[3][3])
-            v_com_cos_sim = cos_similarity(v_com[:3], r[4][:3], v_com_mag, r[4][3])
-            avg_cos_sim = (v_1_cos_sim + v_2_cos_sim + v_com_cos_sim)/3
 
-            #If similarities between residues are within threshold, store the value
-            #if vec_mag_diff < 2.6 * avg_cos_sim - 1.35:
-            #    res_in_threshold[ref_res].append([res, vec_mag_diff])
-            #res_in_threshold[ref_res].append([res, vec_mag_diff])
+            #If TS-SS similarities between residues are within TS-SS threshold, store the value
             compare_v1 = calc_TS_SS(v_1[:3], r[2][:3])
             compare_v2 = calc_TS_SS(v_2[:3], r[3][:3])
             compare_com = calc_TS_SS(v_com[:3], r[4][:3])
@@ -507,7 +478,7 @@ if __name__ == '__main__':
     
     #Calculate reference vectors and vector properties - replace header&footer info
     #New dict format: { Index: [resnum, [X, Y, Z], [v1_x, v1_y, v1_z, v1_mag], [v2_x, v2_y, v2_z, v2_mag], [com_x, com_y, com_z, com_mag], ResName] ...}
-    ref_data = calc_vectors_and_cos_sim(ref_data, ref_distant_res_i, ref_distant_res_j, ref_COM, None, args.criteria)
+    ref_data = calc_vectors_sim(ref_data, ref_distant_res_i, ref_distant_res_j, ref_COM, None, args.criteria)
 
     #Initialize alignment storage dictionary
     results_dataframe = defaultdict(dict)
@@ -549,7 +520,7 @@ if __name__ == '__main__':
         #Calculate subject vectors and vector properties - replace header&footer info
         #Also calculate vector magnitude differences and cosine similarities to reference structure
         #Store residues within similarity threshold. Format: {ref_res_index: [ [sub_res_index, vector_mag_diff] ...] }
-        sub_data, conserved_res = calc_vectors_and_cos_sim(sub_data, sub_distant_res_i, sub_distant_res_j, sub_COM, ref_data, args.criteria)
+        sub_data, conserved_res = calc_vectors_sim(sub_data, sub_distant_res_i, sub_distant_res_j, sub_COM, ref_data, args.criteria)
         
         #sub_res_type = {sub_data[x][0]:sub_data[x][5] for x in sub_data} #Isolate Resname info
         
