@@ -6,17 +6,17 @@ import pandas as pd
 from pathlib import Path
 from collections import defaultdict
 
-parser = argparse.ArgumentParser(description='Identifies spatially correlated residues and calculates their MSSC scores. Spatial alignment of the proteins is done based upon positioning of most conserved distant residues reported in sequence-aligned file, though this can be disabled to use user-aligned structures.')
+parser = argparse.ArgumentParser(description='Identifies spatially correlated residues and calculates their MSSC scores. Spatial alignment of the proteins is done based upon positioning of most distant conserved residues reported in sequence-aligned file, though this can be disabled to use user-aligned structures.')
 parser.add_argument('listfile', type=str, help='Name of a file containing the list of PDB (path/)files to be processed, with (path/)names on newlines')
 parser.add_argument('msa', type=str, help='Name of the Multiple Sequence Alignment file in ClustalW format')
-parser.add_argument('ref', nargs = '+', help='(Path/)Name of the PDB file to serve as a reference for the vector analysis. If using non-"A" protein chain, indicate after name (e.g. A123.pdb B)')
+parser.add_argument('ref', nargs = '+', help='(Path/)Name of the PDB file to serve as a reference/target for the vector analysis. If using non-"A" protein chain, indicate chain letter after the file name (e.g. A123.pdb B)')
 parser.add_argument('-save', type=str, default='results.xlsx', help='Name of .xlsx results file to generate, default results.xlsx')
-parser.add_argument('-noalign', action='store_true', help='If flag is given, the program will not align the vectors according to most distant conserved residue positioning')
-parser.add_argument('-store', type=str, default='processed_pdbs', help='Name of the directory to generate to store the processed PDBs (default: processed_pdbs)')
+parser.add_argument('-noalign', action='store_true', help='If flag is given, the program will not align the proteins according to most distant conserved residue positioning')
+parser.add_argument('-store', type=str, default='processed_pdbs', help='Name of the directory to generate and store the processed PDBs (default: processed_pdbs)')
 parser.add_argument('-criteria', type=float, default=0.1, help='Threshold for TS-SS similarity, default=0.1')
-parser.add_argument('-tightcriteria', type=float, default=0.03, help='Threshold for TS-SS similarity tight convergence for immediate alignment, default=0.03')
-parser.add_argument('-pydist', action='store_const', const='pymol_distances.log', help='Name of the file to store pymol commands used to interconnect correlated atoms of')
-parser.add_argument('-pyheat', action='store_const', const='pymol_heatmap.log', help='Name of the file to store pymol commands used to adjust B-factor values for coloring structure heatmaps')
+parser.add_argument('-tightcriteria', type=float, default=0.03, help='Threshold for TS-SS similarity tight convergence where atoms with a TS-SS score less than the value are automatically considered to be correlated, default=0.03')
+parser.add_argument('-pydist', action='store_const', const='pymol_distances.log', help='If flag is given, the program will output a file to store pymol commands useful for visualizing interconnections between correlated atoms. Alternate name for output file can be specified after flag (default: pymol_distances.log)')
+parser.add_argument('-pyheat', action='store_const', const='pymol_heatmap.log', help='If flag is given, the program will output a file to store pymol commands useful for visualizing MSSC score heatmap distributions. Alternate name for output file can be specified after flag (default: pymol_heatmap.log)')
 args = parser.parse_args()
 
 def retrieve_cons_indices(fname): 
@@ -518,11 +518,9 @@ if __name__ == '__main__':
                     savefile.write(sub_data[res][2]+"{:>8}".format(round(sub_data[res][1][0],3))+"{:>8}".format(round(sub_data[res][1][1],3))+"{:>8}".format(round(sub_data[res][1][2],3))+sub_data[res][3])
         
         #Calculate subject vectors and vector properties - replace header&footer info
-        #Also calculate vector magnitude differences and cosine similarities to reference structure
+        #Also calculate vector TS-SS similarities to reference structure
         #Store residues within similarity threshold. Format: {ref_res_index: [ [sub_res_index, vector_mag_diff] ...] }
         sub_data, conserved_res = calc_vectors_sim(sub_data, sub_distant_res_i, sub_distant_res_j, sub_COM, ref_data, args.criteria)
-        
-        #sub_res_type = {sub_data[x][0]:sub_data[x][5] for x in sub_data} #Isolate Resname info
         
         final_alignment = defaultdict(list)
 
@@ -552,7 +550,7 @@ if __name__ == '__main__':
                 break
 
         #Store the results
-        if args.pydist:
+        if args.pydist: #Geerate optional interconnected residue pymol commands
             with open(args.pydist, 'a') as logfile:
                 for item in final_alignment:
                     results_dataframe[pdb_file[0].split("/")[-1]][ref_data[item][0]] = sub_data[final_alignment[item]][5]
@@ -573,12 +571,12 @@ if __name__ == '__main__':
     results_dataframe_resnum['MSCC'] = results_dataframe['MSCC']
     results_dataframe_resnum['MSCC_norm'] = ( (results_dataframe_resnum['MSCC']-results_dataframe_resnum['MSCC'].min()) / (results_dataframe_resnum['MSCC'].max()-results_dataframe_resnum['MSCC'].min()))*100
     
-    #Save results to excel file
+    #Save results to xlsx file
     with pd.ExcelWriter(args.save) as savefile:
         results_dataframe.to_excel(savefile, sheet_name='ResID', index=False)
         results_dataframe_resnum.to_excel(savefile, sheet_name='ResNum', index=False)
 
-    #Generate optional MSCC heatmap pymol commands
+    #Generate optional MSSC heatmap pymol commands
     if args.pyheat:
         def write_heatmap(row, names, savefile):
             for i in range(0,len(row)-2):
