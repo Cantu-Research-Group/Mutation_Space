@@ -88,18 +88,19 @@ def extract_and_save_CAs(file_name, save_dir):
                 xyz_coords[len(xyz_coords.keys())] = [resnum, [float(coords_lines[resnum][0][30:38]), float(coords_lines[resnum][0][38:46]), float(coords_lines[resnum][0][46:54])], coords_lines[resnum][0][:30], coords_lines[resnum][0][54:]]
     return xyz_coords #Format { Index: [resnum, [X, Y, Z], header, footer], ... }
 
-def calculate_COM_and_distances(df, indices):
+def calculate_COM_and_distances(df, indices, dist_bool):
     COM_xyz = [0.0, 0.0, 0.0]
     dist = 0.0
     res1 = 0
     res2 = 0
     for i in indices:
         COM_xyz = [x+y for x,y in zip(COM_xyz, df[i][1])]#Sum XYZs
-        for j in indices[indices.index(i):]:
-            if i == j: continue
-            test_dist = ( (df[i][1][0]-df[j][1][0])**2 + (df[i][1][1]-df[j][1][1])**2 + (df[i][1][2]-df[j][1][2])**2)**0.5
-            if test_dist > dist:
-                dist, res1, res2 = test_dist, i, j #Save most distant residue pairs
+        if dist_bool == True:
+            for j in indices[indices.index(i):]:
+                if i == j: continue
+                test_dist = ( (df[i][1][0]-df[j][1][0])**2 + (df[i][1][1]-df[j][1][1])**2 + (df[i][1][2]-df[j][1][2])**2)**0.5
+                if test_dist > dist:
+                    dist, res1, res2 = test_dist, i, j #Save most distant residue pairs
     COM_xyz = [x/len(indices) for x in COM_xyz] #Average XYZs
     return COM_xyz, res1, res2
 
@@ -454,7 +455,9 @@ if __name__ == '__main__':
     ref_data = extract_and_save_CAs(args.ref, args.store)
     
     #Calculate the reference/target averaged XYZ center of mass/geometry of all conserved residues & Identify distant conserved res
-    ref_COM, ref_distant_res_i, ref_distant_res_j = calculate_COM_and_distances(ref_data, conserved_res_indices[args.ref[0].split("/")[-1]])
+    ref_COM, ref_distant_res_i, ref_distant_res_j = calculate_COM_and_distances(ref_data, conserved_res_indices[args.ref[0].split("/")[-1]], True)
+    ref_distant_res_i_pos = conserved_res_indices[args.ref[0].split("/")[-1]].index(ref_distant_res_i)
+    ref_distant_res_j_pos = conserved_res_indices[args.ref[0].split("/")[-1]].index(ref_distant_res_j)
 
     #If doing conserved alignment
     if args.noalign == False:
@@ -496,7 +499,9 @@ if __name__ == '__main__':
         sub_data = extract_and_save_CAs(pdb_file, args.store)
         
         #Extract subject averaged XYZ center of mass/geometry of all conserved residues & Identify distant conserved res
-        sub_COM, sub_distant_res_i, sub_distant_res_j = calculate_COM_and_distances(sub_data, conserved_res_indices[pdb_file[0].split("/")[-1]])
+        sub_COM, sub_distant_res_i, sub_distant_res_j = calculate_COM_and_distances(sub_data, conserved_res_indices[args.ref[0].split("/")[-1]], False)
+        sub_distant_res_i = conserved_res_indices[pdb_file[0].split("/")[-1]][ref_distant_res_i_pos]
+        sub_distant_res_j = conserved_res_indices[pdb_file[0].split("/")[-1]][ref_distant_res_j_pos]
 
         #If doing conserved alignment
         if args.noalign == False:
