@@ -418,7 +418,9 @@ def remove_sequential_pairs(fin, init):
 
     fin[ref_res] = chosen_sub_res
     del init[ref_res]
-    for res in init:
+
+    n = list(init.keys())
+    for res in n:
         init[res] = [x for x in init[res] if x[0] != chosen_sub_res]
         if not init[res]:
             del init[res]
