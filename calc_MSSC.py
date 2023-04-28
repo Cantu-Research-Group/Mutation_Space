@@ -318,7 +318,8 @@ def remove_double_pairs(fin, init):
             del init[res_of_doubles[sub_res][0]] #Remove aligned reference residues from options
             del init[res_of_doubles[sub_res][1]]
 
-    for ref_res in init: #Remove used subject residues from available remaining multi-correlated residues
+    n = list(init.keys())
+    for ref_res in n: #Remove used subject residues from available remaining multi-correlated residues
         if not init[ref_res]: #Remove any empty elements
             del init[ref_res]
             continue
@@ -499,7 +500,7 @@ if __name__ == '__main__':
         sub_data = extract_and_save_CAs(pdb_file, args.store)
         
         #Extract subject averaged XYZ center of mass/geometry of all conserved residues & Identify distant conserved res
-        sub_COM, sub_distant_res_i, sub_distant_res_j = calculate_COM_and_distances(sub_data, conserved_res_indices[args.ref[0].split("/")[-1]], False)
+        sub_COM, sub_distant_res_i, sub_distant_res_j = calculate_COM_and_distances(sub_data, conserved_res_indices[pdb_file[0].split("/")[-1]], False)
         sub_distant_res_i = conserved_res_indices[pdb_file[0].split("/")[-1]][ref_distant_res_i_pos]
         sub_distant_res_j = conserved_res_indices[pdb_file[0].split("/")[-1]][ref_distant_res_j_pos]
 
