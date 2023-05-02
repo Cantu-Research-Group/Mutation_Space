@@ -65,7 +65,7 @@ def extract_and_save_CAs(file_name, save_dir):
     with open(file_name[0], 'r') as readpdb:
         for line in readpdb:
             if (line.startswith('ATOM') and line[12:16].strip() == "CA" and line[21] == chain) or (line.startswith('HETATM') and line[12:16].strip() == "CA" and line[21] == chain):
-                coords_lines[int(line[22:26])].append(line)    #Save the CA lines according to ResNum
+                coords_lines[line[22:27].strip()].append(line)    #Save the CA lines according to ResNum
     #Write coords to PDB
     xyz_coords = defaultdict(list)
     with open(save_dir+"/"+file_name[0].rsplit("/",1)[-1], 'w') as savepdb:
