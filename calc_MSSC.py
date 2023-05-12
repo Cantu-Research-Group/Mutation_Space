@@ -36,6 +36,18 @@ def retrieve_cons_indices(fname):
 
     #Convert aligned residue indices to sequence indices for each structure
     conserved_indices = [x for x, c in enumerate(conserved) if c == "*"]
+    
+    if len(conserved_indices) < 2 or (len(conserved_indices) == 2 and abs(conserved_indices[1]-conserved_indices[0]) <= 5):
+        print("Warning: There are fewer than two conserved residues present or the only two conserved residues are too close. Expanding search to include highly similar residues.")
+        similar_indices = [x for x, c in enumerate(conserved) if c == ":"]
+        conserved_indices.extend(similar_indices)
+        
+        if len(conserved_indices) < 2:
+            sys.exit("Error: Not sufficient number of conserved or highly similar residues to continue")
+        if any([abs(x-y)>5 for x in conserved_indices for y in conserved_indices]) == False:
+            sys.exit("Error: Not sufficient conserved or highly similar residues to continue")
+        conserved_indices.extend(similar_indices)
+    
     conserved_res_indices = defaultdict(list)
     for seq in aligned_seq.keys():
         for c_index in conserved_indices:
